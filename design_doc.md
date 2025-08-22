@@ -7,7 +7,7 @@
 
 ### 1.1 什麼是這個系統？
 
-本系統是一個**團隊協作的 AI Agent 開發平台**，讓多人團隊在聊天室環境中共同創建、測試和完善 AI Agent。就像程式碼協作開發一樣，Agent 的 Prompt 也能透過團隊協作來持續改進。
+本系統是一個**團隊協作的 AI Agent 開發平台**，讓多人團隊在聊天室環境中共同創建、測試和完善 AI Agent。系統的核心特色是**使用 Agent 和調校 Agent 在同一個聊天環境中完成**，讓團隊能夠即時與 Agent 互動、發現問題並立即進行改進，形成完整的開發循環。就像程式碼協作開發一樣，Agent 的 Prompt 也能透過團隊協作來持續改進。
 
 ### 1.2 核心價值主張
 
@@ -18,6 +18,7 @@
 ### 1.3 關鍵概念
 
 - **Workspace（工作區）**: 團隊協作的容器，包含成員、Agent 和聊天室
+- **Person（使用者）**: 系統中的真實使用者，可以擔任不同角色參與協作
 - **Participant（參與者）**: 系統中的使用者或 Agent，統一管理身份
 - **Chat（聊天室）**: 實際與 Agent 互動、測試和改進的場所
 - **Agent**: 可被協作開發的 AI 助手，有自己的 Prompt 和版本歷史
@@ -60,8 +61,8 @@ erDiagram
     
     %% 協作機制
     CHAT_AGENT_DRAFT {
-        string chat_id PK_FK
-        string agent_id PK_FK
+        string chat_id PK, FK
+        string agent_id PK, FK
         text draft_prompt_text
         string status "drafting | applied"
     }
@@ -85,7 +86,7 @@ erDiagram
 
 ### 2.2 三層式 Prompt 管理模型
 
-系統採用類似 Git 分支的概念來管理 Agent Prompt：
+系統採用三層式的 Prompt 管理機制來支援協作開發流程：
 
 1. **正式版本 (Production)**: 穩定的 Agent Prompt，全域生效
 2. **測試草稿 (Applied Draft)**: 僅在特定聊天室生效的測試版本
@@ -124,12 +125,13 @@ graph TB
     end
     
     subgraph "建議協作"
-        F[Suggester 提出改進想法] --> G[創建 Suggestion]
-        G --> H[Editor 審核建議]
-        H --> I{接受建議？}
-        I -->|是| J[Merge 建議到 Draft]
-        I -->|否| K[Reject 建議]
-        J --> A
+        F[Suggester 經歷創建與測試流程] --> G[產生改進想法]
+        G --> H[創建 Suggestion]
+        H --> I[Editor 審核建議]
+        I --> J{接受建議？}
+        J -->|是| K[Merge 建議到 Draft]
+        J -->|否| L[Reject 建議]
+        K --> A
     end
 ```
 
@@ -173,6 +175,7 @@ graph LR
 **WORKSPACE**: 協作工作區
 - 包含成員 (WORKSPACE_MEMBERS) 和角色權限
 - 託管私有 Agent 和聊天室
+- 儲存 LLM API 金鑰用於 Agent 運行
 
 **CHAT**: 聊天互動空間
 - 支援多參與者 (人員 + Agent)
@@ -196,6 +199,7 @@ graph LR
 2. **編輯權限控制**:
    - 同一使用者同時只能編輯一個 Draft
    - Draft 編輯鎖定超時時間：30 分鐘
+   - **編輯鎖定機制的必要性**：當多個 Editor 同時嘗試修改同一 Agent 的 Draft 時，會產生並發編輯衝突，導致修改互相覆蓋或資料不一致。透過鎖定機制確保同一時間只有一個 Editor 能編輯特定 Draft，維護資料完整性並避免使用者的工作成果遺失。
 
 3. **Public Agent 發布限制**:
    - 名稱必須全域唯一
@@ -226,6 +230,7 @@ erDiagram
     WORKSPACE {
         string id PK
         string name
+        text llm_api_key "encrypted API key for agent execution"
         datetime created_at
     }
     WORKSPACE_MEMBERS {
@@ -395,8 +400,8 @@ graph TD
         A1[Suggester 點擊 Agent 編輯按鈕]
         A2{檢查編輯鎖定狀態}
         A2 -- 已被鎖定 --> A3[顯示鎖定提示，無法編輯]
-        A2 -- 可編輯 --> A4[鎖定並建立 CHAT_AGENT_DRAFT, status='drafting']
-        A4 --> A5[Suggester 修改 Prompt 內容]
+        A2 -- 可編輯 --> A4[Suggester 修改 Prompt 內容]
+        A4 --> A5[鎖定並建立 CHAT_AGENT_DRAFT, status='drafting']
         A5 --> A6[更新草稿內容]
         A6 --> A7{Suggester 想要測試效果?}
         A7 -- Yes --> A8[點擊 Apply 測試]
