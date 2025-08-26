@@ -273,8 +273,8 @@ erDiagram
         string id PK
         string type "e.g., 'person', 'agent'"
         string name
-        string username "NULL for agents, UNIQUE for persons"
-        string email "NULL for agents, UNIQUE for persons"
+        string username UK "NULL for agents, UNIQUE for persons"
+        string email UK "NULL for agents, UNIQUE for persons"
         string description "NULL for persons"
         string workspace_id FK "NULL for persons and public agents"
         string current_version_id FK "NULL for persons"
@@ -291,21 +291,21 @@ erDiagram
         datetime created_at
     }
     WORKSPACE_MEMBERS {
-        string participant_id PK, FK
-        string workspace_id PK, FK
+        string participant_id PK,FK
+        string workspace_id PK,FK
         string role "e.g., 'editor', 'suggester'"
     }
     TOOL_REGISTRY {
         string id PK
-        string name UNIQUE
+        string name UK
         text description
-        string tool_type "e.g., 'system', 'workspace', 'agent'"
+        string tool_type "system | workspace | agent"
         json tool_schema
         datetime created_at
     }
     AGENT_TOOL_CONFIG {
-        string agent_id PK, FK
-        string tool_id PK, FK
+        string agent_id PK,FK
+        string tool_id PK,FK
         json custom_config "custom settings and parameters"
         text usage_instructions "instructions for agent on how to use this tool"
         boolean is_enabled "DEFAULT TRUE"
@@ -327,8 +327,8 @@ erDiagram
         datetime created_at
     }
     CHAT_PARTICIPANTS {
-        string chat_id PK, FK
-        string participant_id PK, FK
+        string chat_id PK,FK
+        string participant_id PK,FK
     }
     MESSAGE {
         string id PK
@@ -350,8 +350,8 @@ erDiagram
         datetime created_at
     }
     CHAT_AGENT_DRAFT {
-        string chat_id PK, FK
-        string agent_id PK, FK
+        string chat_id PK,FK
+        string agent_id PK,FK
         text draft_prompt_text
         json draft_tool_config "tool configuration changes in draft"
         string status "e.g., 'drafting', 'applied'"
