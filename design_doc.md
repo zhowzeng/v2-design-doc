@@ -17,7 +17,7 @@
 
 ### 1.3 關鍵概念
 
-* **Workspace（工作區）**: 團隊協作的容器，包含成員、Agent 和聊天室
+* **Workspace（工作區）**: 團隊協作的容器，包含Person、Agent 和Chat
 * **Person（使用者）**: 系統中的真實使用者，可以擔任不同角色參與協作
 * **Participant（參與者）**: 系統中的使用者或 Agent，統一管理身份
 * **Chat（聊天室）**: 實際與 Agent 互動、測試和改進的場所
@@ -115,7 +115,7 @@ erDiagram
 
 ```text
 Agent 決策順序：
-Chat 中的 Applied Draft > Agent 的 Current Version
+Chat 中的 Applied Draft > Agent 的 Production Version
 ```
 
 ### 2.3 角色與權限模型
@@ -152,7 +152,7 @@ graph TB
         I --> J{接受建議？}
         J -->|是| K[Merge 建議到 Draft]
         J -->|否| L[Reject 建議]
-        K --> A
+        K --> C
     end
 ```
 
@@ -194,9 +194,8 @@ graph LR
   * Person: NULL (全域使用者，透過 WORKSPACE_MEMBERS 加入多個 Workspace)
   * Agent: 必填 (專屬於特定 Workspace)
   * Public Agent: NULL (全域可用)
-* `is_public`: 是否為 Public Agent (僅 Agent 適用)
 * **Person 專有**: `username`, `email` (全域唯一)
-* **Agent 專有**: `description`, `current_version_id`
+- **Agent 專有**: `description`, `current_version_id`, `is_public`, `published_at`, `published_by_workspace_id`, `published_from_agent_id`
 
 **WORKSPACE**: 協作工作區
 
@@ -558,14 +557,15 @@ graph TD
 
 **Message Truncate 策略**：
 
-* **問題**: Chat 中大量累積的 Message 會導致 Agent context 超出限制
-* **目前假設**: 多數 Agent 使用場景為一問一答，不會有長時間的對話上下文需求
-* **待釐清問題**：
-  * Message 清理的觸發條件（數量？時間？context size？）
-  * 清理策略（truncate？摘要？保留重要事件？）
-  * 對 Agent 對話品質的影響評估
+- **問題**: Chat 中大量累積的 Message 會導致 Agent context 超出限制
+- **目前假設**: 多數 Agent 使用場景為一問一答，不會有長時間的對話上下文需求
+- **待釐清問題**：
+  - Message 清理的觸發條件（數量？時間？context size？）
+    - 傾向傾向採用 context size：於「新訊息發送／寫入」當下評估當前上下文的預估 token 數；若累計超過 `max_context_size`（依模型上限或由 Workspace/Agent 設定），立即觸發清理或降載流程。
+  - 清理策略（truncate？摘要？保留重要事件？）
+  - 對 Agent 對話品質的影響評估
+- **自動切換為 RAG（選項）**：當超限時，將歷史訊息增量向量化並寫入檢索索引；後續回應改走 RAG 管線，以「當前請求 + 檢索到的 Top-K 相關歷史 + 關鍵系統事件」組裝模型上下文。此模式需保留最近數回合與重要事件，並於 UI 明示已啟用 RAG。
 
----
 
 ## **附錄：架構決策紀錄 (ADR)**
 
