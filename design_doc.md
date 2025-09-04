@@ -24,10 +24,11 @@
 * **Actor（參與者）**: 系統中的使用者或 Agent，統一管理身份
 * **Chat（聊天室）**: 實際與 Agent 互動、測試和改進的場所
 * **Agent**: 可被協作開發的 AI 助手，有自己的版本歷史，可配置使用不同的 Tool
-* **Tool**: Agent 可調用的功能工具，如網頁抓取、檔案操作等，支援 Agent 擴展能力
+* **Tool**: Agent 可調用的功能工具，包括系統內建功能（如網頁抓取、檔案操作）和 Agent as Tool（Public Agent 作為工具被其他 Agent 調用）
+  * **Agent as Tool**: 透過 JSON Schema 定義介面，讓 Public Agent 可作為其他 Agent 的 Tool 使用，實現 Agent 間的協作與能力組合
 * **Editor vs Suggester**: 兩種角色，Editor 可直接修改 Agent，Suggester 只能提出建議
 
-## **2.0 系統架構概覽**
+## **2.0 系統架構設計**
 
 ### 2.1 概念 ERD (Entity Relationship Diagram)
 
@@ -103,6 +104,7 @@ erDiagram
     ACTOR ||--o{ AGENT_SPEC : "agent has versions"
     ACTOR ||--o{ AGENT_TOOL_CONFIG : "agent configures tools"
     TOOL_REGISTRY ||--o{ AGENT_TOOL_CONFIG : "tools used by agents"
+    TOOL_REGISTRY ||--o{ ACTOR : "public agents as tools"
     CHAT ||--o{ CHAT_AGENT_DRAFT : "testing ground"
     ACTOR ||--o{ SPEC_SUGGESTION : "suggests improvements"
 ```
@@ -133,7 +135,7 @@ Chat 中的 Applied Draft > Agent 的 Production Version
 * **純消費模式**: 其他 Workspace 只能使用 Public Agent，無法修改
 * **版本獨立**: 原 Agent 更新不會影響已發布的 Public Agent
 
-## **3.0 核心業務流程**
+## **3.0 業務流程設計**
 
 ### 3.1 Agent 協作開發流程
 
@@ -264,7 +266,33 @@ graph LR
    * 同一原始 Agent 不可重複發布
    * 原 Agent 存在 Public Agent 時不可刪除
 
-## **5.0 完整資料庫設計 (ERD)**
+## **4.4 Agent as Tool 設計**
+
+### 4.4.1 核心概念
+
+Agent as Tool 是系統的關鍵功能，允許 Public Agent 作為其他 Agent 的工具使用，實現 Agent 間的協作與能力組合。
+
+**基本原理**:
+* 每個 Public Agent 發布時，系統自動在 `TOOL_REGISTRY` 中創建對應的 Tool 記錄
+* 其他 Agent 可透過標準的 Function Calling 機制調用這些 Agent Tool
+* 在程式實作中，所有 Tool 類型（系統 Tool、Agent Tool）都實作統一的 Interface
+
+### 4.4.2 業務約束
+
+1. **只有 Public Agent 可作為 Tool**: 確保工具的穩定性和可用性
+4. **調用計費**: Agent Tool 的 LLM 費用計入調用方 Workspace
+
+### 4.4.3 使用情境範例
+
+**情境**: 創建一個「市場分析專家」Agent，結合多個專業 Agent 能力
+
+1. **Web Research Agent** (Public): 專門搜集網路資訊
+2. **Data Analysis Agent** (Public): 專門分析數據趨勢  
+3. **Report Writer Agent** (Private): 整合前兩者的結果產出報告
+
+通過這種設計，Agent 生態系統具備了模組化、可組合的特性，讓複雜任務能透過多個專業 Agent 協作完成。
+
+## **4.5 完整資料庫設計 (ERD)**
 
 以下是完整的實體關係圖，包含所有欄位和約束：
 
@@ -302,6 +330,7 @@ erDiagram
         text description
         string tool_type "system | workspace | agent"
         json tool_schema
+        string source_agent_id FK "NULL for non-agent tools"
         datetime created_at
     }
     AGENT_TOOL_CONFIG {
@@ -372,6 +401,7 @@ erDiagram
     ACTOR |o--|{ AGENT_SPEC : "creates"
     ACTOR ||--|{ AGENT_TOOL_CONFIG : "has tool config (agents)"
     TOOL_REGISTRY ||--|{ AGENT_TOOL_CONFIG : "configured for agents"
+    TOOL_REGISTRY |o--|| ACTOR : "public agent as tool source"
     CHAT ||--|{ CHAT_ACTORS : "has"
     ACTOR ||--|{ CHAT_ACTORS : "participates"
     CHAT ||--|{ MESSAGE : "contains"
@@ -384,9 +414,9 @@ erDiagram
     ACTOR |o--|{ CHAT_AGENT_DRAFT : "locks for editing"
 ```
 
-## **6.0 詳細業務流程**
+## **5.0 詳細業務流程**
 
-### 6.1 建立聊天室流程
+### 5.1 建立聊天室流程
 
 ```mermaid
 graph TD
@@ -416,7 +446,7 @@ graph TD
     H --> Z
 ```
 
-### 6.2 Editor 管理 Agent Spec 流程
+### 5.2 Editor 管理 Agent Spec 流程
 
 ```mermaid
 graph TD
@@ -471,7 +501,7 @@ graph TD
     E10 --> F
 ```
 
-### 6.3 Suggester 建議流程
+### 5.3 Suggester 建議流程
 
 ```mermaid
 graph TD
@@ -523,9 +553,9 @@ graph TD
     C10 --> F
 ```
 
-## **7.0 待開發事項與決策**
+## **6.0 待開發事項與決策**
 
-### 7.1 高優先級待開發功能
+### 6.1 高優先級待開發功能
 
 1. **Public Agent 生命週期管理**:
    * 發布流程的詳細設計（UI/UX、API 流程）
@@ -539,7 +569,7 @@ graph TD
    * Workspace 創建流程
    * 使用者邀請加入 Workspace 的流程
 
-### 7.2 技術實作細節確認
+### 6.2 技術實作細節確認
 
 * **Human 全域唯一性**: `username` 和 `email` 透過資料庫 UNIQUE 約束保證全域唯一
 * **權限檢查邏輯**: Human 的 Workspace 權限透過 `WORKSPACE_MEMBERS` 表查詢 `role` 欄位
@@ -555,7 +585,7 @@ graph TD
 * Agent Spec 選擇邏輯：優先使用 applied draft，其次使用 production spec
 * Public Agent 名稱全域唯一性透過資料庫 UNIQUE 約束保證
 
-### 7.3 未決定的設計議題
+### 6.3 未決定的設計議題
 
 **Message Truncate 策略**：
 
@@ -717,25 +747,29 @@ graph TD
         *   權限檢查邏輯：`SELECT role FROM workspace_members WHERE actor_id = ? AND workspace_id = ?`
         *   Chat 參與者查詢需要區分：Human 透過 WORKSPACE_MEMBERS 關聯，Agent 透過 workspace_id 直接關聯
 
-### **ADR-011：Agent Tool 系統採用混合模式設計**
+### **ADR-011：Agent Tool 系統採用混合模式設計與 Agent as Tool**
 
 * **狀態**：已接受
-* **背景**：系統需要支援 Agent 調用外部工具來擴展能力，如網頁抓取、檔案操作、甚至調用其他 Agent。需要設計一個既支援 Tool 複用，又允許 Agent 客製化使用方式的機制。
-* **決策**：採用混合模式的 Tool 系統設計：
-    1. **Tool 註冊表** (TOOL_REGISTRY)：系統級的 Tool 定義與 schema
-    2. **Agent Tool 配置** (AGENT_TOOL_CONFIG)：Agent 特定的 Tool 使用配置
-    3. **草稿支援**：Tool 配置變更透過 CHAT_AGENT_DRAFT 進行協作編輯
-    4. **OpenAI 格式**：採用 OpenAI Tool Call 標準格式記錄 Message
+* **背景**：系統需要支援 Agent 調用外部工具來擴展能力，如網頁抓取、檔案操作、甚至調用其他 Agent。同時需要實現 Agent as Tool 概念，讓 Public Agent 能作為其他 Agent 的工具使用。需要設計一個既支援 Tool 複用，又允許 Agent 客製化使用方式的機制。
+* **決策**：採用混合模式的 Tool 系統設計，整合 Agent as Tool 概念：
+    1. **Tool 註冊表** (TOOL_REGISTRY)：統一管理系統 Tool 和 Agent Tool 的定義與 schema
+    2. **Agent Tool 配置** (AGENT_TOOL_CONFIG)：Agent 特定的 Tool 使用配置  
+    3. **Agent as Tool 自動註冊**：Public Agent 發布時自動註冊為 Tool
+    4. **統一 Interface 實作**：所有 Tool 類型在程式層面實作相同接口
+    5. **OpenAI 格式**：採用 OpenAI Tool Call 標準格式記錄 Message
 * **後果**:
   * **優點**:
-    * **複用與客製化平衡**: Tool 可複用，但 Agent 能客製化使用方式
-    * **協作友善**: Tool 配置變更也納入協作開發流程
+    * **模組化組合**: Agent 能透過調用其他 Agent 實現複雜功能組合
+    * **生態系統**: 建立了 Agent 的可重用生態，促進協作與分享
+    * **統一介面**: 程式實作層面無需區分不同類型的 Tool
+    * **自動化**: Public Agent 發布即自動可用為 Tool，降低使用門檻
     * **標準化**: 採用 OpenAI 格式確保與主流 LLM API 一致性
-    * **擴展性**: 支援未來 Agent-as-Tool 的實作需求
   * **缺點**:
-    * **複雜度增加**: 需要管理 Tool 註冊、配置、草稿等多層次狀態
-    * **協作流程複雜化**: Tool 配置變更也需要經過 Draft -> Apply -> Save 流程
+    * **執行複雜度**: Agent Tool 調用需要額外的執行環境和資源管理
+    * **調用鏈追蹤**: 多層 Agent 調用的除錯和監控更加複雜
+    * **費用計算**: 需要精確追蹤 Agent Tool 調用產生的 LLM 費用
 * **實作要點**:
-        *Tool 使用指引併入 Agent Prompt，讓 Agent 理解如何使用 Tool
-        *   Tool 調用結果記錄在 MESSAGE 中，但 Agent 動態決定是否納入 context
-        *   支援 system/workspace/agent 三種 Tool 類型以應對不同需求
+        *Public Agent 發布時自動生成標準化 Tool Schema
+        *   Agent Tool 調用透過獨立執行環境，確保隔離性和安全性
+        *   實作調用深度限制和超時控制，防止無限遞迴和資源濫用
+        *   所有 Tool 類型在程式中實作統一的 `Tool` Interface
