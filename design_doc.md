@@ -615,6 +615,10 @@ graph TD
    * Workspace 創建流程
    * 使用者邀請加入 Workspace 的流程
 
+4. **Suggestion 反悔重選流程**:
+   * Editor 重新選擇已 merged 的 suggestions 進行重新 merge
+   * 已 accepted 建議的撤銷與狀態重置機制
+
 ### 6.2 技術實作細節確認
 
 * **Human 全域唯一性**: `username` 和 `email` 透過資料庫 UNIQUE 約束保證全域唯一
