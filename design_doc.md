@@ -98,7 +98,7 @@ erDiagram
     %% 關係
     WORKSPACE ||--|{ ACTOR : "develops agents / has members"
     WORKSPACE ||--|{ CHAT : "hosts"
-    CHAT ||--|{ ACTOR : "participants (many-to-many)"
+    CHAT }|--|{ ACTOR : "participants (many-to-many)"
     ACTOR ||--o{ AGENT_SPEC : "agent has versions"
     ACTOR ||--o{ AGENT_TOOL_CONFIG : "agent configures tools"
     TOOL_REGISTRY ||--o{ AGENT_TOOL_CONFIG : "tools used by agents"
@@ -390,7 +390,7 @@ erDiagram
     }
 
     %% Relationships
-    ACTOR ||--|{ WORKSPACE_MEMBERS : "human joins multiple workspaces"
+    ACTOR }|--|{ WORKSPACE_MEMBERS : "human joins multiple workspaces"
     WORKSPACE ||--|{ WORKSPACE_MEMBERS : "contains members"
     WORKSPACE ||--|{ CHAT : "hosts"
     WORKSPACE |o--|{ ACTOR : "owns agents"
@@ -400,8 +400,8 @@ erDiagram
     ACTOR ||--|{ AGENT_TOOL_CONFIG : "has tool config (agents)"
     TOOL_REGISTRY ||--|{ AGENT_TOOL_CONFIG : "configured for agents"
     TOOL_REGISTRY |o--|| ACTOR : "public agent as tool source"
-    CHAT ||--|{ CHAT_ACTORS : "has"
-    ACTOR ||--|{ CHAT_ACTORS : "participates"
+    CHAT }|--|{ CHAT_ACTORS : "has"
+    ACTOR }|--|{ CHAT_ACTORS : "participates"
     CHAT ||--|{ MESSAGE : "contains"
     CHAT ||--|{ SPEC_SUGGESTION : "generates"
     ACTOR ||--|{ SPEC_SUGGESTION : "suggests"
