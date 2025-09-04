@@ -7,7 +7,9 @@
 
 ### 1.1 什麼是這個系統？
 
-本系統是一個**團隊協作的 AI Agent 開發平台**，讓多人團隊在聊天室環境中共同創建、測試和完善 AI Agent。系統的核心特色是**使用 Agent 和調校 Agent 在同一個聊天環境中完成**，讓團隊能夠即時與 Agent 互動、發現問題並立即進行改進，形成完整的開發循環。就像程式碼協作開發一樣，Agent 的 Prompt 也能透過團隊協作來持續改進。
+### 1.1 什麼是這個系統？
+
+本系統是一個**團隊協作的 AI Agent 開發平台**，讓多人團隊在聊天室環境中共同創建、測試和完善 AI Agent。系統的核心特色是**使用 Agent 和調校 Agent 在同一個聊天環境中完成**，讓團隊能夠即時與 Agent 互動、發現問題並立即進行改進，形成完整的開發循環。就像程式碼協作開發一樣，Agent 的 Spec 也能透過團隊協作來持續改進。
 
 ### 1.2 核心價值主張
 
@@ -17,11 +19,11 @@
 
 ### 1.3 關鍵概念
 
-* **Workspace（工作區）**: 團隊協作的容器，包含Person、Agent 和Chat
-* **Person（使用者）**: 系統中的真實使用者，可以擔任不同角色參與協作
-* **Participant（參與者）**: 系統中的使用者或 Agent，統一管理身份
+* **Workspace（工作區）**: 團隊協作的容器，包含Human、Agent 和Chat
+* **Human（使用者）**: 系統中的真實使用者，可以擔任不同角色參與協作
+* **Actor（參與者）**: 系統中的使用者或 Agent，統一管理身份
 * **Chat（聊天室）**: 實際與 Agent 互動、測試和改進的場所
-* **Agent**: 可被協作開發的 AI 助手，有自己的 Prompt 和版本歷史，可配置使用不同的 Tool
+* **Agent**: 可被協作開發的 AI 助手，有自己的版本歷史，可配置使用不同的 Tool
 * **Tool**: Agent 可調用的功能工具，如網頁抓取、檔案操作等，支援 Agent 擴展能力
 * **Editor vs Suggester**: 兩種角色，Editor 可直接修改 Agent，Suggester 只能提出建議
 
@@ -39,9 +41,9 @@ erDiagram
         string name
     }
     
-    PARTICIPANT {
+    ACTOR {
         string id PK
-        string type "person | agent"
+        string type "human | agent"
         string name
         string workspace_id FK "null for public agents"
     }
@@ -53,7 +55,7 @@ erDiagram
     }
     
     %% Agent 專用
-    PROMPT_VERSION {
+    AGENT_SPEC {
         string id PK
         string agent_id FK
         int version_number
@@ -86,7 +88,7 @@ erDiagram
         string status "drafting | applied"
     }
     
-    PROMPT_SUGGESTION {
+    SPEC_SUGGESTION {
         string id PK
         string target_agent_id FK
         string suggester_id FK
@@ -95,21 +97,21 @@ erDiagram
     }
 
     %% 關係
-    WORKSPACE ||--|{ PARTICIPANT : "develops agents / has members"
+    WORKSPACE ||--|{ ACTOR : "develops agents / has members"
     WORKSPACE ||--|{ CHAT : "hosts"
-    CHAT ||--|{ PARTICIPANT : "participants (many-to-many)"
-    PARTICIPANT ||--o{ PROMPT_VERSION : "agent has versions"
-    PARTICIPANT ||--o{ AGENT_TOOL_CONFIG : "agent configures tools"
+    CHAT ||--|{ ACTOR : "participants (many-to-many)"
+    ACTOR ||--o{ AGENT_SPEC : "agent has versions"
+    ACTOR ||--o{ AGENT_TOOL_CONFIG : "agent configures tools"
     TOOL_REGISTRY ||--o{ AGENT_TOOL_CONFIG : "tools used by agents"
     CHAT ||--o{ CHAT_AGENT_DRAFT : "testing ground"
-    PARTICIPANT ||--o{ PROMPT_SUGGESTION : "suggests improvements"
+    ACTOR ||--o{ SPEC_SUGGESTION : "suggests improvements"
 ```
 
-### 2.2 三層式 Prompt 管理模型
+### 2.2 三層式 Spec 管理模型
 
-系統採用三層式的 Prompt 管理機制來支援協作開發流程：
+系統採用三層式的 Spec 管理機制來支援協作開發流程：
 
-1. **正式版本 (Production)**: 穩定的 Agent Prompt，全域生效
+1. **正式版本 (Production)**: 穩定的 Agent Spec，全域生效
 2. **測試草稿 (Applied Draft)**: 僅在特定聊天室生效的測試版本
 3. **編輯草稿 (Drafting)**: 正在編輯中的暫存版本
 
@@ -187,15 +189,15 @@ graph LR
 
 ### 4.2 核心實體詳細規格
 
-**PARTICIPANT**: 統一的參與者實體
+**ACTOR**: 統一的參與者實體
 
-* `type`: 'person' | 'agent'
+* `type`: 'human' | 'agent'
 * `workspace_id`:
-  * Person: NULL (全域使用者，透過 WORKSPACE_MEMBERS 加入多個 Workspace)
+  * Human: NULL (全域使用者，透過 WORKSPACE_MEMBERS 加入多個 Workspace)
   * Agent: 必填 (專屬於特定 Workspace)
   * Public Agent: NULL (全域可用)
-* **Person 專有**: `username`, `email` (全域唯一)
-- **Agent 專有**: `description`, `current_version_id`, `is_public`, `published_at`, `published_by_workspace_id`, `published_from_agent_id`
+* **Human 專有**: `username`, `email` (全域唯一)
+- **Agent 專有**: `description`, `current_spec_id`, `is_public`, `published_at`, `published_by_workspace_id`, `published_from_agent_id`
 
 **WORKSPACE**: 協作工作區
 
@@ -208,7 +210,7 @@ graph LR
 * 支援多參與者 (人員 + Agent)
 * 記錄完整對話歷史和系統事件
 
-**PROMPT_VERSION**: Agent 的正式版本
+**AGENT_SPEC**: Agent 的正式版本
 
 * 版本號遞增管理
 * 記錄創建者和時間戳
@@ -217,7 +219,7 @@ graph LR
 
 * `status`: 'drafting' | 'applied'
 * `draft_tool_config`: JSON 格式的 Tool 配置草稿
-* 編輯鎖定機制 (`locked_by_participant_id`, `locked_at`)
+* 編輯鎖定機制 (`locked_by_actor_id`, `locked_at`)
 
 **TOOL_REGISTRY**: Tool 註冊表
 
@@ -227,15 +229,15 @@ graph LR
 **AGENT_TOOL_CONFIG**: Agent Tool 配置
 
 * `custom_config`: JSON 格式的客製化配置（重試次數、超時等）
-* `usage_instructions`: Tool 的使用指引，會併入 Agent Prompt
+* `usage_instructions`: Tool 的使用指引，會併入 Agent Spec
 * `is_enabled`: 是否啟用此 Tool
 
 ### 4.3 業務邏輯約束
 
-1. **Agent Prompt 選擇優先順序**:
+1. **Agent Spec 選擇優先順序**:
 
    ```text
-   Chat 中的 Applied Draft > Agent Current Version
+   Chat 中的 Applied Draft > Agent Current Spec
    ```
 
 2. **Agent Tool 使用邏輯**:
@@ -243,7 +245,7 @@ graph LR
    ```text
    1. 查詢 Agent 的 AGENT_TOOL_CONFIG (is_enabled=true)
    2. 合併 Tool 的 tool_schema 與 custom_config
-   3. 將 usage_instructions 併入 Agent Prompt
+   3. 將 usage_instructions 併入 Agent Spec
    ```
 
 3. **編輯權限控制**:
@@ -251,10 +253,10 @@ graph LR
    * Draft 編輯鎖定超時時間：30 分鐘
    * **編輯鎖定機制的必要性**：當多個 Editor 同時嘗試修改同一 Agent 的 Draft 時，會產生並發編輯衝突，導致修改互相覆蓋或資料不一致。透過鎖定機制確保同一時間只有一個 Editor 能編輯特定 Draft，維護資料完整性並避免使用者的工作成果遺失。
 
-4. **Person 與 Workspace 關係約束**:
-   * Person (`type='person'`) 的 `workspace_id` 必須為 NULL
-   * Person 的 `username` 和 `email` 全域唯一
-   * Person 透過 `WORKSPACE_MEMBERS` 加入 Workspace，可擁有不同角色
+4. **Human 與 Workspace 關係約束**:
+   * Human (`type='human'`) 的 `workspace_id` 必須為 NULL
+   * Human 的 `username` 和 `email` 全域唯一
+   * Human 透過 `WORKSPACE_MEMBERS` 加入 Workspace，可擁有不同角色
    * Agent (`type='agent'`) 的 `workspace_id` 必須非 NULL（除非是 Public Agent）
 
 5. **Public Agent 發布限制**:
@@ -268,15 +270,15 @@ graph LR
 
 ```mermaid
 erDiagram
-    PARTICIPANT {
+    ACTOR {
         string id PK
-        string type "e.g., 'person', 'agent'"
+        string type "e.g., 'human', 'agent'"
         string name
-        string username UK "NULL for agents, UNIQUE for persons"
-        string email UK "NULL for agents, UNIQUE for persons"
-        string description "NULL for persons"
-        string workspace_id FK "NULL for persons and public agents"
-        string current_version_id FK "NULL for persons"
+        string username UK "NULL for agents, UNIQUE for humans"
+        string email UK "NULL for agents, UNIQUE for humans"
+        string description "NULL for humans"
+        string workspace_id FK "NULL for humans and public agents"
+        string current_spec_id FK "NULL for humans"
         boolean is_public "DEFAULT FALSE, for agents only"
         datetime published_at "NULL for non-public agents"
         string published_by_workspace_id FK "NULL for non-public agents"
@@ -290,7 +292,7 @@ erDiagram
         datetime created_at
     }
     WORKSPACE_MEMBERS {
-        string participant_id PK,FK
+        string actor_id PK,FK
         string workspace_id PK,FK
         string role "e.g., 'editor', 'suggester'"
     }
@@ -311,12 +313,12 @@ erDiagram
         datetime created_at
         datetime updated_at
     }
-    PROMPT_VERSION {
+    AGENT_SPEC {
         string id PK
         string agent_id FK
         int version_number
         text prompt_text
-        string created_by_participant_id FK
+        string created_by_actor_id FK
         datetime created_at
     }
     CHAT {
@@ -325,20 +327,20 @@ erDiagram
         string title "Nullable"
         datetime created_at
     }
-    CHAT_PARTICIPANTS {
+    CHAT_ACTORS {
         string chat_id PK,FK
-        string participant_id PK,FK
+        string actor_id PK,FK
     }
     MESSAGE {
         string id PK
         string chat_id FK
-        string author_id "Participant ID or NULL for system"
-        string author_type "e.g., 'participant', 'system'"
+        string author_id "Actor ID or NULL for system"
+        string author_type "e.g., 'actor', 'system'"
         string type "e.g., 'TEXT_MESSAGE', 'TOOL_CALL', 'TOOL_RESPONSE'"
         json payload "stores message content or event data"
         datetime created_at
     }
-    PROMPT_SUGGESTION {
+    SPEC_SUGGESTION {
         string id PK
         string chat_id FK
         string target_agent_id FK
@@ -354,32 +356,32 @@ erDiagram
         text draft_prompt_text
         json draft_tool_config "tool configuration changes in draft"
         string status "e.g., 'drafting', 'applied'"
-        string created_by_participant_id FK
-        string locked_by_participant_id FK "NULL when not locked"
+        string created_by_actor_id FK
+        string locked_by_actor_id FK "NULL when not locked"
         datetime locked_at "NULL when not locked"
         datetime updated_at
     }
 
     %% Relationships
-    PARTICIPANT ||--|{ WORKSPACE_MEMBERS : "person joins multiple workspaces"
+    ACTOR ||--|{ WORKSPACE_MEMBERS : "human joins multiple workspaces"
     WORKSPACE ||--|{ WORKSPACE_MEMBERS : "contains members"
     WORKSPACE ||--|{ CHAT : "hosts"
-    WORKSPACE |o--|{ PARTICIPANT : "owns agents"
-    PARTICIPANT ||--|{ PROMPT_VERSION : "has versions (agents)"
-    PARTICIPANT |o--|| PROMPT_VERSION : "has current (agents)"
-    PARTICIPANT |o--|{ PROMPT_VERSION : "creates"
-    PARTICIPANT ||--|{ AGENT_TOOL_CONFIG : "has tool config (agents)"
+    WORKSPACE |o--|{ ACTOR : "owns agents"
+    ACTOR ||--|{ AGENT_SPEC : "has versions (agents)"
+    ACTOR |o--|| AGENT_SPEC : "has current (agents)"
+    ACTOR |o--|{ AGENT_SPEC : "creates"
+    ACTOR ||--|{ AGENT_TOOL_CONFIG : "has tool config (agents)"
     TOOL_REGISTRY ||--|{ AGENT_TOOL_CONFIG : "configured for agents"
-    CHAT ||--|{ CHAT_PARTICIPANTS : "has"
-    PARTICIPANT ||--|{ CHAT_PARTICIPANTS : "participates"
+    CHAT ||--|{ CHAT_ACTORS : "has"
+    ACTOR ||--|{ CHAT_ACTORS : "participates"
     CHAT ||--|{ MESSAGE : "contains"
-    CHAT ||--|{ PROMPT_SUGGESTION : "generates"
-    PARTICIPANT ||--|{ PROMPT_SUGGESTION : "suggests"
-    PARTICIPANT ||--|{ PROMPT_SUGGESTION : "is target of (agents)"
+    CHAT ||--|{ SPEC_SUGGESTION : "generates"
+    ACTOR ||--|{ SPEC_SUGGESTION : "suggests"
+    ACTOR ||--|{ SPEC_SUGGESTION : "is target of (agents)"
     CHAT ||--|{ CHAT_AGENT_DRAFT : "has draft for"
-    PARTICIPANT ||--|{ CHAT_AGENT_DRAFT : "has draft in (agents)"
-    PARTICIPANT |o--|{ CHAT_AGENT_DRAFT : "creates"
-    PARTICIPANT |o--|{ CHAT_AGENT_DRAFT : "locks for editing"
+    ACTOR ||--|{ CHAT_AGENT_DRAFT : "has draft in (agents)"
+    ACTOR |o--|{ CHAT_AGENT_DRAFT : "creates"
+    ACTOR |o--|{ CHAT_AGENT_DRAFT : "locks for editing"
 ```
 
 ## **6.0 詳細業務流程**
@@ -414,7 +416,7 @@ graph TD
     H --> Z
 ```
 
-### 6.2 Editor 管理 Agent Prompt 流程
+### 6.2 Editor 管理 Agent Spec 流程
 
 ```mermaid
 graph TD
@@ -423,14 +425,14 @@ graph TD
         A2[Editor 在聊天中發送指令]
         A1 --> B[開始編輯流程]
         A2 --> A3[LLM Agent 呼叫 revise_prompt 工具]
-        A3 --> A4[系統將新 Prompt 內容寫入]
+        A3 --> A4[系統將新 Spec 內容寫入]
         A4 --> C[在 CHAT_AGENT_DRAFT 表中建立/更新紀錄, status='drafting']
         C --> A5[UI 提示: 已產生新草稿]
     end
     
     subgraph Phase2 [編輯與套用]
-        B1[編輯介面載入 Prompt]
-        B2[Editor 修改 Prompt 內容]
+        B1[編輯介面載入 Spec]
+        B2[Editor 修改 Spec 內容]
         B3[自動更新 status='drafting' 的草稿]
         B4[Editor 點擊 Apply 按鈕]
         B5[系統將 status 更新為 applied]
@@ -441,8 +443,8 @@ graph TD
     subgraph Phase3 [Agent 執行邏輯]
         D1[Agent 在此 Chat 中收到新任務]
         D2{查詢是否存在 status='applied' 的草稿?}
-        D2 -- Yes --> D3[使用 applied 的草稿 Prompt]
-        D2 -- No --> D4[使用最新 PROMPT_VERSION]
+        D2 -- Yes --> D3[使用 applied 的草稿 Spec]
+        D2 -- No --> D4[使用最新 AGENT_SPEC]
         D3 --> D6[執行任務並回應]
         D4 --> D6
     end
@@ -452,8 +454,8 @@ graph TD
         E2{系統驗證權限與狀態}
         E2 -- 失敗 --> E3[顯示錯誤訊息]
         E2 -- 成功 --> E4[開始資料庫交易]
-        E4 --> E5[在 PROMPT_VERSION 建立新版本]
-        E5 --> E6[更新 AGENT 表的 current_version_id]
+        E4 --> E5[在 AGENT_SPEC 建立新版本]
+        E5 --> E6[更新 AGENT 表的 current_spec_id]
         E6 --> E7[刪除 CHAT_AGENT_DRAFT 紀錄]
         E7 --> E8[在 MESSAGE 表寫入事件]
         E8 --> E9[結束交易]
@@ -477,13 +479,13 @@ graph TD
         A1[Suggester 點擊 Agent 編輯按鈕]
         A2{檢查編輯鎖定狀態}
         A2 -- 已被鎖定 --> A3[顯示鎖定提示，無法編輯]
-        A2 -- 可編輯 --> A4[Suggester 修改 Prompt 內容]
+        A2 -- 可編輯 --> A4[Suggester 修改 Spec 內容]
         A4 --> A5[鎖定並建立 CHAT_AGENT_DRAFT, status='drafting']
         A5 --> A6[更新草稿內容]
         A6 --> A7{Suggester 想要測試效果?}
         A7 -- Yes --> A8[點擊 Apply 測試]
         A8 --> A9[系統將 status 更新為 applied]
-        A9 --> A10[Chat 中 Agent 使用新 Prompt 回應]
+        A9 --> A10[Chat 中 Agent 使用新 Spec 回應]
         A10 --> A11{滿意測試結果?}
         A11 -- No --> A12[繼續編輯 Draft]
         A12 --> A6
@@ -493,7 +495,7 @@ graph TD
     
     subgraph Phase2 [建立建議記錄]
         B1[系統呼叫 AI 生成 summary]
-        B2[在 PROMPT_SUGGESTION 表建立記錄]
+        B2[在 SPEC_SUGGESTION 表建立記錄]
         B3[刪除 CHAT_AGENT_DRAFT 紀錄]
         B4[釋放編輯鎖定]
         B5[在 MESSAGE 表寫入 SUGGESTION_CREATED 事件]
@@ -504,12 +506,12 @@ graph TD
     subgraph Phase3 [Editor 管理建議]
         C1[Editor 打開建議管理介面]
         C2[系統顯示所有 pending 建議列表]
-        C3[顯示：author, summary, 時間, prompt 內容]
+        C3[顯示：author, summary, 時間, spec 內容]
         C4[Editor 選擇多個建議進行 merge]
         C5[系統呼叫外部 Merge Agent API]
-        C6[API 回傳 merged prompt]
+        C6[API 回傳 merged spec]
         C7[系統建立新的 CHAT_AGENT_DRAFT]
-        C8[Draft status='drafting', 內容為 merged prompt]
+        C8[Draft status='drafting', 內容為 merged spec]
         C9[更新所選建議的 status='accepted']
         C10[Editor 可進入正常的編輯 → Apply → Save 流程]
         C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7 --> C8 --> C9 --> C10
@@ -539,18 +541,18 @@ graph TD
 
 ### 7.2 技術實作細節確認
 
-* **Person 全域唯一性**: `username` 和 `email` 透過資料庫 UNIQUE 約束保證全域唯一
-* **權限檢查邏輯**: Person 的 Workspace 權限透過 `WORKSPACE_MEMBERS` 表查詢 `role` 欄位
-* **Chat 參與者查詢**: 需要區分 Person（透過 WORKSPACE_MEMBERS 關聯）和 Agent（透過 workspace_id 直接關聯）
+* **Human 全域唯一性**: `username` 和 `email` 透過資料庫 UNIQUE 約束保證全域唯一
+* **權限檢查邏輯**: Human 的 Workspace 權限透過 `WORKSPACE_MEMBERS` 表查詢 `role` 欄位
+* **Chat 參與者查詢**: 需要區分 Human（透過 WORKSPACE_MEMBERS 關聯）和 Agent（透過 workspace_id 直接關聯）
 * **Tool 系統整合點**:
-  * Tool 使用指引透過字串拼接方式併入 Agent Prompt
+  * Tool 使用指引透過字串拼接方式併入 Agent Spec
   * Tool 調用採用 OpenAI 標準格式，支援 `tool_calls` 和 `tool_call_id` 追蹤
   * Agent 執行時動態載入 `AGENT_TOOL_CONFIG` 中 `is_enabled=true` 的 Tool
   * Tool 配置變更透過 `CHAT_AGENT_DRAFT.draft_tool_config` 進行協作編輯
 * Draft 編輯鎖定超時時間：30 分鐘
 * Public Agent 名稱衝突處理：要求重新命名，不提供智能建議
 * Message 的 JSON payload 在應用層進行 schema 驗證
-* Agent Prompt 選擇邏輯：優先使用 applied draft，其次使用 current version
+* Agent Spec 選擇邏輯：優先使用 applied draft，其次使用 production spec
 * Public Agent 名稱全域唯一性透過資料庫 UNIQUE 約束保證
 
 ### 7.3 未決定的設計議題
@@ -561,7 +563,7 @@ graph TD
 - **目前假設**: 多數 Agent 使用場景為一問一答，不會有長時間的對話上下文需求
 - **待釐清問題**：
   - Message 清理的觸發條件（數量？時間？context size？）
-    - 傾向傾向採用 context size：於「新訊息發送／寫入」當下評估當前上下文的預估 token 數；若累計超過 `max_context_size`（依模型上限或由 Workspace/Agent 設定），立即觸發清理或降載流程。
+    - 傾向採用 context size：於「新訊息發送／寫入」當下評估當前上下文的預估 token 數；若累計超過 `max_context_size`（依模型上限或由 Workspace/Agent 設定），立即觸發清理或降載流程。
   - 清理策略（truncate？摘要？保留重要事件？）
   - 對 Agent 對話品質的影響評估
 - **自動切換為 RAG（選項）**：當超限時，將歷史訊息增量向量化並寫入檢索索引；後續回應改走 RAG 管線，以「當前請求 + 檢索到的 Top-K 相關歷史 + 關鍵系統事件」組裝模型上下文。此模式需保留最近數回合與重要事件，並於 UI 明示已啟用 RAG。
@@ -569,15 +571,15 @@ graph TD
 
 ## **附錄：架構決策紀錄 (ADR)**
 
-### **ADR-001：採用統一參與者模型 (Unified Participant Model)**
+### **ADR-001：採用統一參與者模型 (Unified Actor Model)**
 
 * **狀態**：已接受
-* **背景**：原設計中 `PERSON` 和 `AGENT` 是分離的實體。這導致在處理如聊天參與者、權限分配等場景時，需要進行多型關聯查詢，增加了後端邏輯的複雜性和潛在的效能問題。
-* **決策**：廢棄 `PERSON` 和 `AGENT` 兩個獨立的表，引入一個統一的 `PARTICIPANT` 表。透過 `type` 欄位（'person', 'agent'）來区分不同類型的參與者。特定於類型的屬性（如 person 的 `email`，agent 的 `description`）作為可為空的欄位存在於該表中。
+* **背景**：原設計中 `HUMAN` 和 `AGENT` 是分離的實體。這導致在處理如聊天參與者、權限分配等場景時，需要進行多型關聯查詢，增加了後端邏輯的複雜性和潛在的效能問題。
+* **決策**：廢棄 `HUMAN` 和 `AGENT` 兩個獨立的表，引入一個統一的 `ACTOR` 表。透過 `type` 欄位（'human', 'agent'）來区分不同類型的參與者。特定於類型的屬性（如 human 的 `email`，agent 的 `description`）作為可為空的欄位存在於該表中。
 * **後果**:
   * **優點**:
     * **簡化查詢**: 所有與參與者相關的查詢（如獲取聊天成員）都變得單一和直接，無需 `UNION` 或在應用層進行合併。
-    * **統一身份**: 簡化了權限、成員資格和稽核日誌（如 `created_by`）的模型，所有外鍵都統一指向 `participant.id`。
+    * **統一身份**: 簡化了權限、成員資格和稽核日誌（如 `created_by`）的模型，所有外鍵都統一指向 `actor.id`。
     * **擴展性**: 未來若要引入新的參與者類型（如 'bot'），只需增加一個新的 `type` 枚舉值，而無需大的結構變更。
   * **缺點**:
     * **稀疏欄位**: 表中會存在「稀疏欄位」（Sparse Columns），即某些行在特定於類型的欄位上值為 NULL。但現代資料庫對 NULL 值的儲存和索引優化已非常高效，這在實踐中通常不是問題。
@@ -586,7 +588,7 @@ graph TD
 
 * **狀態**：已接受
 * **背景**：在 `CHAT_AGENT_DRAFT` 實體中，我們紀錄了特定聊天室中特定 Agent 的草稿內容和狀態，但缺少了「這份草稿是由誰建立或最後修改的」這一關鍵資訊。
-* **決策**：在 `CHAT_AGENT_DRAFT` 表中增加一個 `created_by_participant_id` 欄位，外鍵關聯到 `PARTICIPANT.id`。
+* **決策**：在 `CHAT_AGENT_DRAFT` 表中增加一個 `created_by_actor_id` 欄位，外鍵關聯到 `ACTOR.id`。
 * **後果**:
   * **優點**:
     * **完整稽核**: 提供了完整的操作追溯鏈，對於除錯和理解協作流程至關重要。
@@ -626,28 +628,28 @@ graph TD
     * **查詢效能**: 對 `payload` 欄位內的特定資料進行複雜查詢，效能可能低於傳統的結構化欄位。但在主要為追加寫、順序讀的場景下，這是可接受的。
     * **資料一致性**: 需要在應用層確保寫入 `payload` 的資料結構是有效的。
 
-### **ADR-005：實作三層式 Prompt 管理模型**
+### **ADR-005：實作三層式 Spec 管理模型**
 
 * **狀態**：已接受
-* **背景**：系統核心功能是在聊天中協作迭代 Agent Prompt。需要一個機制，既能儲存正式版本，又允許在特定聊天中進行無風險測試，同時還能儲存未完成的編輯。
-* **決策**：實作一個三層式的 Prompt 管理模型：
-    1. **正式版本 (PromptVersion)**: Agent 的官方穩定版本。
+* **背景**：系統核心功能是在聊天中協作迭代 Agent Spec。需要一個機制，既能儲存正式版本，又允許在特定聊天中進行無風險測試，同時還能儲存未完成的編輯。
+* **決策**：實作一個三層式的 Spec 管理模型：
+    1. **正式版本 (Agent Spec)**: Agent 的官方穩定版本。
     2. **已套用草稿 (Applied Draft)**: `CHAT_AGENT_DRAFT` 中 `status='applied'` 的紀錄，僅在當前 Chat 生效，用於即時測試。
     3. **編輯中草稿 (Drafting)**: `CHAT_AGENT_DRAFT` 中 `status='drafting'` 的紀錄，是未生效的編輯暫存。
 * **後果**:
   * **優點**:
-    * **安全實驗**: 提供了安全的沙箱環境，Chat 內的 Prompt 修改不會污染全域的正式版本。
+    * **安全實驗**: 提供了安全的沙箱環境，Chat 內的 Spec 修改不會污染全域的正式版本。
     * **流程清晰**: 完美支援「編輯 -> 測試 -> 儲存」的完整協作流程。
     * **類比 Git**: 概念上類似 Git 的分支模型，對開發者友好。
   * **缺點**:
-    * **邏輯複雜**: Agent 決定使用哪個 Prompt 的邏輯鏈變長。
+    * **邏輯複雜**: Agent 決定使用哪個 Spec 的邏輯鏈變長。
     * **UI/UX 挑戰**: 前端需要清晰地向使用者展示當前 Agent 的生效狀態。
 
 ### **ADR-006：採用正規化 Join Table 處理多對多關係**
 
 * **狀態**：已接受
-* **背景**：系統需要處理多種多對多關係，如 Workspace 與 Participant、Chat 與 Participant。
-* **決策**：採用傳統的關聯式資料庫設計最佳實踐：為每一個多對多關係建立專門的中間表（Join Table），如 `WORKSPACE_MEMBERS` 和 `CHAT_PARTICIPANTS`。
+* **背景**：系統需要處理多種多對多關係，如 Workspace 與 Actor、Chat 與 Actor。
+* **決策**：採用傳統的關聯式資料庫設計最佳實踐：為每一個多對多關係建立專門的中間表（Join Table），如 `WORKSPACE_MEMBERS` 和 `CHAT_ACTORS`。
 * **後果**:
   * **優點**:
     * **資料完整性**: 可利用資料庫外鍵約束保證關聯有效性。
@@ -691,29 +693,29 @@ graph TD
     * **使用者體驗**: 某些操作會因約束而被阻止，需要 UI 層提供清楚的錯誤說明
     * **運維複雜度**: Workspace 解散需要預先下架所有 Public Agent
 
-### **ADR-010：Person 與 Workspace 的多對多關係設計**
+### **ADR-010：Human 與 Workspace 的多對多關係設計**
 
 * **狀態**：已接受
-* **背景**：原設計中 Person 透過 `PARTICIPANT.workspace_id` 綁定到特定 Workspace，導致同一真實使用者在不同 Workspace 中會是不同實體。這造成使用者體驗不佳，無法追蹤跨 Workspace 活動，且違反了真實世界的使用模式。
-* **決策**：重新設計 Person 與 Workspace 的關係為多對多：
-    1. Person 的 `workspace_id = NULL`，成為全域使用者實體
+* **背景**：原設計中 Human 透過 `ACTOR.workspace_id` 綁定到特定 Workspace，導致同一真實使用者在不同 Workspace 中會是不同實體。這造成使用者體驗不佳，無法追蹤跨 Workspace 活動，且違反了真實世界的使用模式。
+* **決策**：重新設計 Human 與 Workspace 的關係為多對多：
+    1. Human 的 `workspace_id = NULL`，成為全域使用者實體
     2. Agent 的 `workspace_id` 保持必填，仍專屬於特定 Workspace  
-    3. 透過 `WORKSPACE_MEMBERS` 表管理 Person 加入多個 Workspace 的關係
+    3. 透過 `WORKSPACE_MEMBERS` 表管理 Human 加入多個 Workspace 的關係
     4. Public Agent 特殊處理：`workspace_id = NULL` 且 `is_public = true`
 * **後果**:
   * **優點**:
     * **真實使用模式**: 符合使用者期望，一個帳號可參與多個團隊協作
     * **跨 Workspace 追蹤**: 可以追蹤使用者的完整活動歷史和貢獻
     * **簡化使用者管理**: 使用者只需註冊一次，可被邀請加入任何 Workspace
-    * **保持概念清晰**: Person（全域）vs Agent（Workspace 專屬）的區別更明確
+    * **保持概念清晰**: Human（全域）vs Agent（Workspace 專屬）的區別更明確
   * **缺點**:
-    * **查詢複雜度**: Chat 參與者查詢需要區分 Person 和 Agent 的不同關聯方式
-    * **權限檢查複雜度**: Person 的 Workspace 權限需要透過 JOIN WORKSPACE_MEMBERS 檢查
-    * **資料遷移成本**: 需要合併現有的重複 Person 記錄
+    * **查詢複雜度**: Chat 參與者查詢需要區分 Human 和 Agent 的不同關聯方式
+    * **權限檢查複雜度**: Human 的 Workspace 權限需要透過 JOIN WORKSPACE_MEMBERS 檢查
+    * **資料遷移成本**: 需要合併現有的重複 Human 記錄
 * **實作細節**:
-        *Person 的 `username` 和 `email` 需要加上 UNIQUE 約束確保全域唯一性
-        *   權限檢查邏輯：`SELECT role FROM workspace_members WHERE participant_id = ? AND workspace_id = ?`
-        *   Chat 參與者查詢需要區分：Person 透過 WORKSPACE_MEMBERS 關聯，Agent 透過 workspace_id 直接關聯
+        *Human 的 `username` 和 `email` 需要加上 UNIQUE 約束確保全域唯一性
+        *   權限檢查邏輯：`SELECT role FROM workspace_members WHERE actor_id = ? AND workspace_id = ?`
+        *   Chat 參與者查詢需要區分：Human 透過 WORKSPACE_MEMBERS 關聯，Agent 透過 workspace_id 直接關聯
 
 ### **ADR-011：Agent Tool 系統採用混合模式設計**
 
@@ -737,13 +739,3 @@ graph TD
         *Tool 使用指引併入 Agent Prompt，讓 Agent 理解如何使用 Tool
         *   Tool 調用結果記錄在 MESSAGE 中，但 Agent 動態決定是否納入 context
         *   支援 system/workspace/agent 三種 Tool 類型以應對不同需求
-
-### **ADR-009：Message Truncate 策略暫緩**
-
-* **狀態**：待討論
-* **背景**：Chat 中大量累積的 Message 會導致 Agent context 超出限制，需要某種清理或摘要機制。
-* **目前假設**：多數 Agent 使用場景為一問一答，不會有長時間的對話上下文需求。
-* **待釐清問題**：
-        *Message 清理的觸發條件（數量？時間？context size？）
-        *   清理策略（truncate？摘要？保留重要事件？）
-        *   對 Agent 對話品質的影響評估
