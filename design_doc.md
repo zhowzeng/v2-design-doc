@@ -619,6 +619,13 @@ graph TD
    * Editor 重新選擇已 merged 的 suggestions 進行重新 merge
    * 已 accepted 建議的撤銷與狀態重置機制
 
+5. **多分頁即時同步機制**:
+   * WebSocket 連線管理與訂閱機制設計
+   * 同一使用者多分頁間的訊息即時同步
+   * Agent streaming 回應的即時推送
+   * Draft 編輯狀態的即時廣播
+   * 斷線重連與離線訊息補齊機制
+
 ### 6.2 技術實作細節確認
 
 * **Human 全域唯一性**: `username` 和 `email` 透過資料庫 UNIQUE 約束保證全域唯一
