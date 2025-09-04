@@ -53,12 +53,19 @@ erDiagram
         string title
     }
     
-    %% Agent 專用
+    %% Agent 專用（完整快照 Spec）
     AGENT_SPEC {
         string id PK
         string agent_id FK
-        int version_number
+        string spec_type "production | chat_draft | suggestion"
+        int version_number "production 使用；其他類型為 NULL"
+        string name
+        string description
         text prompt_text
+        json model_config "{ model, temperature, reasoning_effort, ... }"
+        json tools_config "工具設定（引用 TOOL_REGISTRY.id）"
+        string created_by_actor_id FK
+        datetime created_at
     }
     
     %% Tool 系統
@@ -70,20 +77,11 @@ erDiagram
         json tool_schema
     }
     
-    AGENT_TOOL_CONFIG {
-        string agent_id PK, FK
-        string tool_id PK, FK
-        json custom_config
-        text usage_instructions
-        boolean is_enabled
-    }
-    
     %% 協作機制
     CHAT_AGENT_DRAFT {
         string chat_id PK, FK
         string agent_id PK, FK
-        text draft_prompt_text
-        json draft_tool_config
+        string spec_id FK "內容存於 AGENT_SPEC"
         string status "drafting | applied"
     }
     
@@ -91,7 +89,7 @@ erDiagram
         string id PK
         string target_agent_id FK
         string suggester_id FK
-        text suggested_prompt_text
+        string spec_id FK "建議的 Spec 快照"
         string status "pending | accepted | rejected"
     }
 
@@ -99,9 +97,8 @@ erDiagram
     WORKSPACE ||--|{ ACTOR : "develops agents / has members"
     WORKSPACE ||--|{ CHAT : "hosts"
     CHAT }|--|{ ACTOR : "participants (many-to-many)"
-    ACTOR ||--o{ AGENT_SPEC : "agent has versions"
-    ACTOR ||--o{ AGENT_TOOL_CONFIG : "agent configures tools"
-    TOOL_REGISTRY ||--o{ AGENT_TOOL_CONFIG : "tools used by agents"
+    ACTOR ||--o{ AGENT_SPEC : "agent has specs (production/draft/suggestion)"
+    TOOL_REGISTRY |o--o{ AGENT_SPEC : "referenced via tools_config"
     TOOL_REGISTRY ||--o{ ACTOR : "public agents as tools"
     CHAT ||--o{ CHAT_AGENT_DRAFT : "testing ground"
     ACTOR ||--o{ SPEC_SUGGESTION : "suggests improvements"
@@ -109,11 +106,11 @@ erDiagram
 
 ### 2.2 三層式 Spec 管理模型
 
-系統採用三層式的 Spec 管理機制來支援協作開發流程：
+系統採用三層式的 Spec 管理機制來支援協作開發流程（所有內容均以 AGENT_SPEC 快照保存）：
 
-1. **正式版本 (Production)**: 穩定的 Agent Spec，全域生效
-2. **測試草稿 (Applied Draft)**: 僅在特定聊天室生效的測試版本
-3. **編輯草稿 (Drafting)**: 正在編輯中的暫存版本
+1. **正式版本 (Production)**: `AGENT_SPEC.spec_type='production'` 的穩定 Spec，全域生效
+2. **測試草稿 (Applied Draft)**: `AGENT_SPEC.spec_type='chat_draft'`，透過 `CHAT_AGENT_DRAFT.status='applied'` 指派到特定聊天室
+3. **編輯草稿 (Drafting)**: `AGENT_SPEC.spec_type='chat_draft'`，透過 `CHAT_AGENT_DRAFT.status='drafting'` 關聯於特定聊天室，尚未生效
 
 ```text
 Agent 決策順序：
@@ -141,8 +138,8 @@ Chat 中的 Applied Draft > Agent 的 Production Version
 
 ```mermaid
 graph TB
-    subgraph "創建與測試"
-        A[Editor 修改 Agent Prompt] --> B[創建 Draft]
+  subgraph "創建與測試"
+    A[Editor 修改 Agent Spec] --> B[創建 Draft]
         B --> C[Apply 到當前聊天測試]
         C --> D{測試結果滿意？}
         D -->|否| A
@@ -164,7 +161,7 @@ graph TB
 
 1. **創建聊天室**: 從 Workspace 成員、Agent 和 Public Agent 中選擇參與者
 2. **實時對話**: 人員和 Agent 在聊天室中自然互動
-3. **即時測試**: Applied Draft 讓 Agent 在特定聊天中使用新 Prompt
+3. **即時測試**: Applied Draft 讓 Agent 在特定聊天中使用新 Spec（完整快照）
 4. **協作改進**: 基於對話結果調整和完善 Agent
 
 ### 3.3 Public Agent 分享流程
@@ -212,15 +209,22 @@ graph LR
 * 支援多參與者 (人員 + Agent)
 * 記錄完整對話歷史和系統事件
 
-**AGENT_SPEC**: Agent 的正式版本
+**AGENT_SPEC**: Agent 的完整版本快照（name/description/prompt/model/tools）
 
-* 版本號遞增管理
-* 記錄創建者和時間戳
+* `spec_type`: 'production' | 'chat_draft' | 'suggestion'
+* `version_number`: 僅 production 使用（遞增管理），其他類型為 NULL
+* `name`: 此版本的 Agent 顯示名稱
+* `description`: 此版本的描述
+* `prompt_text`: 此版本的系統提示/規格
+* `model_config`: JSON（如 `{ model, temperature, reasoning_effort, top_p, max_output_tokens, ... }`）
+* `tools_config`: JSON（陣列/物件，包含工具啟用狀態、客製參數與 `tool_id` 引用）
+* `created_by_actor_id`, `created_at`: 稽核資訊
+* 版本化原則：任何影響 Agent 定義的變更（含 name、description、prompt、model_config、tools_config）都需產生新的 `AGENT_SPEC` 記錄，不直接就地更新
 
-**CHAT_AGENT_DRAFT**: 聊天室專用草稿
+**CHAT_AGENT_DRAFT**: 聊天室專用草稿（僅保存指標與狀態）
 
+* `spec_id`: 指向存放於 `AGENT_SPEC` 的草稿內容（`spec_type='chat_draft'`）
 * `status`: 'drafting' | 'applied'
-* `draft_tool_config`: JSON 格式的 Tool 配置草稿
 * 編輯鎖定機制 (`locked_by_actor_id`, `locked_at`)
 
 **TOOL_REGISTRY**: Tool 註冊表
@@ -228,11 +232,7 @@ graph LR
 * `tool_type`: 'system' (系統內建) | 'workspace' (工作區專用) | 'agent' (Agent 實作)
 * `tool_schema`: JSON Schema 定義 Tool 完整規格（輸入參數、輸出格式等）
 
-**AGENT_TOOL_CONFIG**: Agent Tool 配置
-
-* `custom_config`: JSON 格式的客製化配置（重試次數、超時等）
-* `usage_instructions`: Tool 的使用指引，會併入 Agent Spec
-* `is_enabled`: 是否啟用此 Tool
+（已整併入 `AGENT_SPEC.tools_config`）
 
 ### 4.3 業務邏輯約束
 
@@ -245,9 +245,10 @@ graph LR
 2. **Agent Tool 使用邏輯**:
 
    ```text
-   1. 查詢 Agent 的 AGENT_TOOL_CONFIG (is_enabled=true)
-   2. 合併 Tool 的 tool_schema 與 custom_config
-   3. 將 usage_instructions 併入 Agent Spec
+   1. 取得實際生效的 AGENT_SPEC（依優先序）
+   2. 從該 Spec 的 tools_config 中篩選啟用工具
+   3. 以 Tool 的 tool_schema 與 tools_config 進行合併
+   4. 併入工具使用指引（若 tools_config 提供說明文字）
    ```
 
 3. **編輯權限控制**:
@@ -267,6 +268,10 @@ graph LR
    * 原 Agent 存在 Public Agent 時不可刪除
 
 6. **跨 Workspace 建議機制**:
+7. **Spec 版本化原則**:
+  * 所有影響 Agent 行為或定義的修改都以新增 `AGENT_SPEC` 快照方式落盤
+  * `ACTOR.current_spec_id` 僅指向最新的 production 版本；Draft/Suggestion 皆透過各自實體以 `spec_id` 參照
+
    * 外部使用者對 Public Agent 建立建議時，系統自動建立臨時成員關係
    * 臨時成員角色為 `outside_suggester`，`is_temporary=true`
    * 建議被處理（accepted/rejected）後，臨時成員關係自動清理
@@ -282,6 +287,7 @@ Agent as Tool 是系統的關鍵功能，允許 Public Agent 作為其他 Agent 
 * 每個 Public Agent 發布時，系統自動在 `TOOL_REGISTRY` 中創建對應的 Tool 記錄
 * 其他 Agent 可透過標準的 Function Calling 機制調用這些 Agent Tool
 * 在程式實作中，所有 Tool 類型（系統 Tool、Agent Tool）都實作統一的 Interface
+* 工具啟用與客製化設定統一由 `AGENT_SPEC.tools_config` 決定
 
 ### 4.4.2 業務約束
 
@@ -341,20 +347,16 @@ erDiagram
         string source_agent_id FK "NULL for non-agent tools"
         datetime created_at
     }
-    AGENT_TOOL_CONFIG {
-        string agent_id PK,FK
-        string tool_id PK,FK
-        json custom_config "custom settings and parameters"
-        text usage_instructions "instructions for agent on how to use this tool"
-        boolean is_enabled "DEFAULT TRUE"
-        datetime created_at
-        datetime updated_at
-    }
     AGENT_SPEC {
         string id PK
         string agent_id FK
-        int version_number
+        string spec_type "e.g., 'production', 'chat_draft', 'suggestion'"
+        int version_number "only for production; NULL otherwise"
+        string name
+        string description
         text prompt_text
+        json model_config "{ model, temperature, reasoning_effort, ... }"
+        json tools_config "array/object with tool enablement and custom settings"
         string created_by_actor_id FK
         datetime created_at
     }
@@ -382,7 +384,7 @@ erDiagram
         string chat_id FK
         string target_agent_id FK
         string suggester_id FK
-        text suggested_prompt_text
+        string spec_id FK "the proposed spec snapshot"
         text ai_generated_summary "Auto-generated summary of changes"
         string status "e.g., 'pending', 'accepted', 'rejected'"
         datetime created_at
@@ -390,8 +392,7 @@ erDiagram
     CHAT_AGENT_DRAFT {
         string chat_id PK,FK
         string agent_id PK,FK
-        text draft_prompt_text
-        json draft_tool_config "tool configuration changes in draft"
+        string spec_id FK "content lives in AGENT_SPEC"
         string status "e.g., 'drafting', 'applied'"
         string created_by_actor_id FK
         string locked_by_actor_id FK "NULL when not locked"
@@ -404,11 +405,10 @@ erDiagram
     WORKSPACE ||--|{ WORKSPACE_MEMBERS : "contains members"
     WORKSPACE ||--|{ CHAT : "hosts"
     WORKSPACE |o--|{ ACTOR : "owns agents"
-    ACTOR ||--|{ AGENT_SPEC : "has versions (agents)"
+    ACTOR ||--|{ AGENT_SPEC : "has specs (agents)"
     ACTOR |o--|| AGENT_SPEC : "has current (agents)"
     ACTOR |o--|{ AGENT_SPEC : "creates"
-    ACTOR ||--|{ AGENT_TOOL_CONFIG : "has tool config (agents)"
-    TOOL_REGISTRY ||--|{ AGENT_TOOL_CONFIG : "configured for agents"
+    TOOL_REGISTRY |o--o{ AGENT_SPEC : "referenced in tools_config"
     TOOL_REGISTRY |o--|| ACTOR : "public agent as tool source"
     CHAT }|--|{ CHAT_ACTORS : "has"
     ACTOR }|--|{ CHAT_ACTORS : "participates"
@@ -463,8 +463,8 @@ graph TD
         A2[Editor 在聊天中發送指令]
         A1 --> B[開始編輯流程]
         A2 --> A3[LLM Agent 呼叫 revise_prompt 工具]
-        A3 --> A4[系統將新 Spec 內容寫入]
-        A4 --> C[在 CHAT_AGENT_DRAFT 表中建立/更新紀錄, status='drafting']
+        A3 --> A4[系統將新內容寫入 AGENT_SPEC（spec_type='chat_draft'）]
+        A4 --> C[在 CHAT_AGENT_DRAFT 建立/更新紀錄（指向 spec_id）, status='drafting']
         C --> A5[UI 提示: 已產生新草稿]
     end
     
@@ -473,7 +473,7 @@ graph TD
         B2[Editor 修改 Spec 內容]
         B3[自動更新 status='drafting' 的草稿]
         B4[Editor 點擊 Apply 按鈕]
-        B5[系統將 status 更新為 applied]
+        B5[系統將 CHAT_AGENT_DRAFT.status 更新為 applied]
         B6[UI 提示: 草稿已在此聊天室生效]
         B1 --> B2 --> B3 --> B4 --> B5 --> B6
     end
@@ -492,9 +492,9 @@ graph TD
         E2{系統驗證權限與狀態}
         E2 -- 失敗 --> E3[顯示錯誤訊息]
         E2 -- 成功 --> E4[開始資料庫交易]
-        E4 --> E5[在 AGENT_SPEC 建立新版本]
+        E4 --> E5[在 AGENT_SPEC 建立新版本（spec_type='production'）]
         E5 --> E6[更新 AGENT 表的 current_spec_id]
-        E6 --> E7[刪除 CHAT_AGENT_DRAFT 紀錄]
+        E6 --> E7[刪除該 Chat 的 CHAT_AGENT_DRAFT 紀錄]
         E7 --> E8[在 MESSAGE 表寫入事件]
         E8 --> E9[結束交易]
         E9 --> E10[UI 提示: Agent 已更新]
@@ -518,11 +518,11 @@ graph TD
         A2{檢查編輯鎖定狀態}
         A2 -- 已被鎖定 --> A3[顯示鎖定提示，無法編輯]
         A2 -- 可編輯 --> A4[Suggester 修改 Spec 內容]
-        A4 --> A5[鎖定並建立 CHAT_AGENT_DRAFT, status='drafting']
+        A4 --> A5[鎖定並建立 CHAT_AGENT_DRAFT（指向新建 AGENT_SPEC.chat_draft）, status='drafting']
         A5 --> A6[更新草稿內容]
         A6 --> A7{Suggester 想要測試效果?}
         A7 -- Yes --> A8[點擊 Apply 測試]
-        A8 --> A9[系統將 status 更新為 applied]
+        A8 --> A9[系統將 CHAT_AGENT_DRAFT.status 更新為 applied]
         A9 --> A10[Chat 中 Agent 使用新 Spec 回應]
         A10 --> A11{滿意測試結果?}
         A11 -- No --> A12[繼續編輯 Draft]
@@ -533,12 +533,13 @@ graph TD
     
     subgraph Phase2 [建立建議記錄]
         B1[系統呼叫 AI 生成 summary]
-        B2[在 SPEC_SUGGESTION 表建立記錄]
-        B3[刪除 CHAT_AGENT_DRAFT 紀錄]
-        B4[釋放編輯鎖定]
-        B5[在 MESSAGE 表寫入 SUGGESTION_CREATED 事件]
-        B6[UI 提示：建議已提交]
-        B1 --> B2 --> B3 --> B4 --> B5 --> B6
+        B2[建立 AGENT_SPEC（spec_type='suggestion'）快照]
+        B3[在 SPEC_SUGGESTION 表建立記錄並引用 spec_id]
+        B4[刪除 CHAT_AGENT_DRAFT 紀錄]
+        B5[釋放編輯鎖定]
+        B6[在 MESSAGE 表寫入 SUGGESTION_CREATED 事件]
+        B7[UI 提示：建議已提交]
+        B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
     end
     
     subgraph Phase3 [Editor 管理建議]
@@ -632,10 +633,11 @@ graph TD
 * **權限檢查邏輯**: Human 的 Workspace 權限透過 `WORKSPACE_MEMBERS` 表查詢 `role` 欄位
 * **Chat 參與者查詢**: 需要區分 Human（透過 WORKSPACE_MEMBERS 關聯）和 Agent（透過 workspace_id 直接關聯）
 * **Tool 系統整合點**:
-  * Tool 使用指引透過字串拼接方式併入 Agent Spec
+  * Tool 使用指引與啟用設定統一存於 `AGENT_SPEC.tools_config`，並隨 Spec 版本化
   * Tool 調用採用 OpenAI 標準格式，支援 `tool_calls` 和 `tool_call_id` 追蹤
-  * Agent 執行時動態載入 `AGENT_TOOL_CONFIG` 中 `is_enabled=true` 的 Tool
-  * Tool 配置變更透過 `CHAT_AGENT_DRAFT.draft_tool_config` 進行協作編輯
+  * Agent 執行時依「生效的 AGENT_SPEC」載入啟用工具（由 tools_config 篩選）
+  * Tool 配置的協作變更以建立/更新 chat draft 專用 `AGENT_SPEC` 版本進行
+* **Spec 全量快照原則**: name/description/prompt/model_config/tools_config 的任何更動都以新增 `AGENT_SPEC` 記錄呈現（不可就地改寫）
 * Draft 編輯鎖定超時時間：30 分鐘
 * Public Agent 名稱衝突處理：要求重新命名，不提供智能建議
 * Message 的 JSON payload 在應用層進行 schema 驗證
@@ -694,12 +696,12 @@ graph TD
     * **穩定性保障**: Public Agent 作為穩定工具，保證一致的使用者體驗。
   * **缺點**:
     * **更新機制**: 原開發者只能透過下架舊版本、發布新版本來更新 Public Agent。
-    * **資料冗餘**: 每次發布都會創建新的 Agent 實體和 Prompt 版本。
+    * **資料冗餘**: 每次發布都會創建新的 Agent 實體和 Spec 版本。
 * **發布規則**:
-        *任何 Workspace Editor 都可發布 Agent
-        *   Public Agent 名稱全域唯一，衝突時要求重新命名
-        *發布時只複製當前版本的 Prompt，版本號從 1 重新開始
-        *   原 Workspace 存在 Public Agent 時不可刪除，必須先下架所有 Public Agent
+    * 任何 Workspace Editor 都可發布 Agent
+    * Public Agent 名稱全域唯一，衝突時要求重新命名
+    * 發布時只複製當前生效的 Spec 快照（production），版本號從 1 重新開始
+    * 原 Workspace 存在 Public Agent 時不可刪除，必須先下架所有 Public Agent
 
 ### **ADR-004：聊天紀錄採用 JSON 事件載體設計**
 
@@ -719,10 +721,10 @@ graph TD
 
 * **狀態**：已接受
 * **背景**：系統核心功能是在聊天中協作迭代 Agent Spec。需要一個機制，既能儲存正式版本，又允許在特定聊天中進行無風險測試，同時還能儲存未完成的編輯。
-* **決策**：實作一個三層式的 Spec 管理模型：
-    1. **正式版本 (Agent Spec)**: Agent 的官方穩定版本。
-    2. **已套用草稿 (Applied Draft)**: `CHAT_AGENT_DRAFT` 中 `status='applied'` 的紀錄，僅在當前 Chat 生效，用於即時測試。
-    3. **編輯中草稿 (Drafting)**: `CHAT_AGENT_DRAFT` 中 `status='drafting'` 的紀錄，是未生效的編輯暫存。
+* **決策**：實作一個三層式的 Spec 管理模型（內容皆為 `AGENT_SPEC` 快照，並透過 `CHAT_AGENT_DRAFT` 以 `spec_id` 關聯在 Chat 範疇內生效）：
+  1. **正式版本 (Agent Spec)**: `AGENT_SPEC.spec_type='production'` 的官方穩定版本。
+  2. **已套用草稿 (Applied Draft)**: `AGENT_SPEC.spec_type='chat_draft'` 的快照，透過 `CHAT_AGENT_DRAFT.status='applied'` 關聯到特定 Chat，僅該 Chat 生效。
+  3. **編輯中草稿 (Drafting)**: `AGENT_SPEC.spec_type='chat_draft'` 的快照，透過 `CHAT_AGENT_DRAFT.status='drafting'` 關聯到特定 Chat，尚未生效。
 * **後果**:
   * **優點**:
     * **安全實驗**: 提供了安全的沙箱環境，Chat 內的 Spec 修改不會污染全域的正式版本。
@@ -750,9 +752,9 @@ graph TD
 * **背景**：在 Chat 中，多個 Editor 可能同時想要編輯同一個 Agent 的 Draft，需要防止並發編輯衝突。
 * **決策**：在 `CHAT_AGENT_DRAFT` 表中引入編輯鎖定機制。當 Editor 開始編輯 Draft 時，系統會鎖定該 Draft，其他 Editor 只能查看但無法修改。
 * **實作方式**：
-        *新增 `locked_by_participant_id` 欄位記錄當前編輯者
-        *   新增 `locked_at` 欄位記錄鎖定開始時間，用於超時自動釋放
-        *   設定鎖定超時機制（如 30 分鐘）防止編輯者意外離線造成永久鎖定
+    * 新增 `locked_by_participant_id` 欄位記錄當前編輯者
+    * 新增 `locked_at` 欄位記錄鎖定開始時間，用於超時自動釋放
+    * 設定鎖定超時機制（如 30 分鐘）防止編輯者意外離線造成永久鎖定
 * **後果**:
   * **優點**:
     * **避免衝突**: 確保同一時間只有一個 Editor 能修改 Draft
@@ -767,10 +769,10 @@ graph TD
 * **背景**：系統中存在多個邊界情況需要明確處理策略，包括 Agent 刪除限制、編輯鎖定範圍、Public Agent 重複發布等。
 * **決策**：採用簡化的邊界情況處理策略，優先系統穩定性而非使用者便利性。
 * **具體規則**:
-        ***Agent 刪除限制**: 已發布 Public Agent 的原 Workspace Agent 不可刪除，透過資料庫外鍵約束強制執行
-        *   **編輯互斥擴展**: 單一使用者在任何時刻只能編輯一個 Agent Draft，透過 UI 層實作限制
-        ***重複發布防護**: 增加 `published_from_agent_id` 欄位追蹤發布來源，同一原始 Agent 不可重複發布
-        *   **下架影響忽略**: Public Agent 被下架時不考慮對使用中 Chat 的影響，由使用者自行處理
+    * **Agent 刪除限制**: 已發布 Public Agent 的原 Workspace Agent 不可刪除，透過資料庫外鍵約束強制執行
+    * **編輯互斥擴展**: 單一使用者在任何時刻只能編輯一個 Agent Draft，透過 UI 層實作限制
+    * **重複發布防護**: 增加 `published_from_agent_id` 欄位追蹤發布來源，同一原始 Agent 不可重複發布
+    * **下架影響忽略**: Public Agent 被下架時不考慮對使用中 Chat 的影響，由使用者自行處理
 * **後果**:
   * **優點**:
     * **實作簡單**: 避免複雜的狀態同步和通知機制
@@ -800,20 +802,20 @@ graph TD
     * **權限檢查複雜度**: Human 的 Workspace 權限需要透過 JOIN WORKSPACE_MEMBERS 檢查
     * **資料遷移成本**: 需要合併現有的重複 Human 記錄
 * **實作細節**:
-        *Human 的 `username` 和 `email` 需要加上 UNIQUE 約束確保全域唯一性
-        *   權限檢查邏輯：`SELECT role FROM workspace_members WHERE actor_id = ? AND workspace_id = ?`
-        *   Chat 參與者查詢需要區分：Human 透過 WORKSPACE_MEMBERS 關聯，Agent 透過 workspace_id 直接關聯
+    * Human 的 `username` 和 `email` 需要加上 UNIQUE 約束確保全域唯一性
+    * 權限檢查邏輯：`SELECT role FROM workspace_members WHERE actor_id = ? AND workspace_id = ?`
+    * Chat 參與者查詢需要區分：Human 透過 WORKSPACE_MEMBERS 關聯，Agent 透過 workspace_id 直接關聯
 
 ### **ADR-011：Agent Tool 系統採用混合模式設計與 Agent as Tool**
 
 * **狀態**：已接受
 * **背景**：系統需要支援 Agent 調用外部工具來擴展能力，如網頁抓取、檔案操作、甚至調用其他 Agent。同時需要實現 Agent as Tool 概念，讓 Public Agent 能作為其他 Agent 的工具使用。需要設計一個既支援 Tool 複用，又允許 Agent 客製化使用方式的機制。
 * **決策**：採用混合模式的 Tool 系統設計，整合 Agent as Tool 概念：
-    1. **Tool 註冊表** (TOOL_REGISTRY)：統一管理系統 Tool 和 Agent Tool 的定義與 schema
-    2. **Agent Tool 配置** (AGENT_TOOL_CONFIG)：Agent 特定的 Tool 使用配置  
-    3. **Agent as Tool 自動註冊**：Public Agent 發布時自動註冊為 Tool
-    4. **統一 Interface 實作**：所有 Tool 類型在程式層面實作相同接口
-    5. **OpenAI 格式**：採用 OpenAI Tool Call 標準格式記錄 Message
+  1. **Tool 註冊表** (TOOL_REGISTRY)：統一管理系統 Tool 和 Agent Tool 的定義與 schema
+  2. **工具設定內嵌於 Spec**：每個 Agent 的工具啟用與客製化設定內嵌於 `AGENT_SPEC.tools_config`，隨 Spec 版本化  
+  3. **Agent as Tool 自動註冊**：Public Agent 發布時自動註冊為 Tool
+  4. **統一 Interface 實作**：所有 Tool 類型在程式層面實作相同接口
+  5. **OpenAI 格式**：採用 OpenAI Tool Call 標準格式記錄 Message
 * **後果**:
   * **優點**:
     * **模組化組合**: Agent 能透過調用其他 Agent 實現複雜功能組合
@@ -826,10 +828,11 @@ graph TD
     * **調用鏈追蹤**: 多層 Agent 調用的除錯和監控更加複雜
     * **費用計算**: 需要精確追蹤 Agent Tool 調用產生的 LLM 費用
 * **實作要點**:
-        *Public Agent 發布時自動生成標準化 Tool Schema
-        *   Agent Tool 調用透過獨立執行環境，確保隔離性和安全性
-        *   實作調用深度限制和超時控制，防止無限遞迴和資源濫用
-        *   所有 Tool 類型在程式中實作統一的 `Tool` Interface
+    * Public Agent 發布時自動生成標準化 Tool Schema
+    * 工具設定保存在 Spec（`AGENT_SPEC.tools_config`）中並隨版本演進
+    * Agent Tool 調用透過獨立執行環境，確保隔離性和安全性
+    * 實作調用深度限制和超時控制，防止無限遞迴和資源濫用
+    * 所有 Tool 類型在程式中實作統一的 `Tool` Interface
 
 ### **ADR-012：跨 Workspace Public Agent 建議機制採用臨時成員關係模式**
 
