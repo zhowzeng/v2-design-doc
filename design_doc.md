@@ -122,16 +122,18 @@ Chat 中的 Applied Draft > Agent 的 Production Version
 
 ### 2.3 角色與權限模型
 
-| 角色 | Agent 修改 | 提出建議 | 版本發布 | 聊天參與 |
-|------|------------|----------|----------|----------|
-| **Editor** | ✅ 直接修改 | ❌ 不需要 | ✅ | ✅ |
-| **Suggester** | ❌ 無法直接修改 | ✅ | ❌ | ✅ |
+| 角色 | Agent 修改 | 提出建議 | 版本發布 | 聊天參與 | 備註 |
+|------|------------|----------|----------|----------|------|
+| **Editor** | ✅ 直接修改 | ❌ 不需要 | ✅ | ✅ | Workspace 內部成員 |
+| **Suggester** | ❌ 無法直接修改 | ✅ | ❌ | ✅ | Workspace 內部成員 |
+| **Outside Suggester** | ❌ | ✅ | ❌ | ❌ | 臨時技術性角色，僅用於跨 Workspace 建議 |
 
 ### 2.4 Public Agent 機制
 
 * **發布分離**: Public Agent 是原 Workspace Agent 的獨立副本
 * **純消費模式**: 其他 Workspace 只能使用 Public Agent，無法修改
 * **版本獨立**: 原 Agent 更新不會影響已發布的 Public Agent
+* **跨 Workspace 建議**: 外部 Workspace 使用者可對 Public Agent 提出改進建議，透過臨時成員關係機制實現
 
 ## **3.0 業務流程設計**
 
@@ -264,6 +266,12 @@ graph LR
    * 同一原始 Agent 不可重複發布
    * 原 Agent 存在 Public Agent 時不可刪除
 
+6. **跨 Workspace 建議機制**:
+   * 外部使用者對 Public Agent 建立建議時，系統自動建立臨時成員關係
+   * 臨時成員角色為 `outside_suggester`，`is_temporary=true`
+   * 建議被處理（accepted/rejected）後，臨時成員關係自動清理
+   * `outside_suggester` 只能查看和操作其關聯的建議，無其他 Workspace 權限
+
 ## **4.4 Agent as Tool 設計**
 
 ### 4.4.1 核心概念
@@ -320,7 +328,9 @@ erDiagram
     WORKSPACE_MEMBERS {
         string actor_id PK,FK
         string workspace_id PK,FK
-        string role "e.g., 'editor', 'suggester'"
+        string role "e.g., 'editor', 'suggester', 'outside_suggester'"
+        boolean is_temporary "DEFAULT FALSE, for outside_suggester"
+        string linked_suggestion_id FK "NULL for permanent members"
     }
     TOOL_REGISTRY {
         string id PK
@@ -551,6 +561,44 @@ graph TD
     C10 --> F
 ```
 
+### 5.4 跨 Workspace Public Agent 建議流程
+
+```mermaid
+graph TD
+    subgraph Phase1 [外部建議創建]
+        A1[外部使用者在 Chat 中使用 Public Agent]
+        A2[發現問題或改進機會]
+        A3[外部使用者建立建議]
+        A4[系統檢查 Public Agent 來源 Workspace]
+        A5[自動建立臨時成員關係]
+        A6[WORKSPACE_MEMBERS: role='outside_suggester', is_temporary=true]
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6
+    end
+    
+    subgraph Phase2 [建議處理]
+        B1[原 Workspace Editor 收到建議通知]
+        B2[Editor 檢視跨 Workspace 建議]
+        B3{Editor 決策}
+        B3 -- Accept --> B4[Merge 建議到 Draft]
+        B3 -- Reject --> B5[拒絕建議]
+        B4 --> B6[更新建議狀態為 accepted]
+        B5 --> B7[更新建議狀態為 rejected]
+        B1 --> B2 --> B3
+    end
+    
+    subgraph Phase3 [自動清理]
+        C1[建議狀態變更觸發清理]
+        C2[刪除臨時成員關係]
+        C3[記錄清理日誌]
+        B6 --> C1
+        B7 --> C1
+        C1 --> C2 --> C3
+    end
+    
+    A6 --> B1
+    C3 --> F[流程結束]
+```
+
 ## **6.0 待開發事項與決策**
 
 ### 6.1 高優先級待開發功能
@@ -771,3 +819,29 @@ graph TD
         *   Agent Tool 調用透過獨立執行環境，確保隔離性和安全性
         *   實作調用深度限制和超時控制，防止無限遞迴和資源濫用
         *   所有 Tool 類型在程式中實作統一的 `Tool` Interface
+
+### **ADR-012：跨 Workspace Public Agent 建議機制採用臨時成員關係模式**
+
+* **狀態**：已接受
+* **背景**：系統需要支援外部 Workspace 使用者對 Public Agent 提出改進建議，但現有的建議機制（SPEC_SUGGESTION）需要建議者是目標 Workspace 的成員才能滿足外鍵約束。同時需要平衡功能需求與 Workspace 封閉性原則。
+* **決策**：採用臨時技術性成員關係模式。當外部使用者對 Public Agent 建立建議時，系統自動在 WORKSPACE_MEMBERS 中建立臨時記錄，角色為 `outside_suggester`，並在建議處理完成後自動清理。
+* **實作方式**：
+    * 在 WORKSPACE_MEMBERS 表新增 `is_temporary`、`linked_suggestion_id` 欄位
+    * 建議創建時自動建立臨時成員關係
+    * 建議狀態變為 accepted/rejected 時觸發自動清理
+* **後果**:
+  * **優點**:
+    * **資料完整性**: 滿足外鍵約束，維持現有資料模型結構
+    * **透明性**: 對原 Workspace 成員完全透明，不會在成員列表中顯示臨時成員
+    * **自動管理**: 系統自動處理生命週期，無需手動維運
+    * **權限隔離**: 臨時成員只能操作關聯的建議，無其他 Workspace 權限
+  * **缺點**:
+    * **概念複雜度**: 需要區分真實成員和技術性臨時成員
+    * **清理風險**: 清理失敗可能導致臨時關係殘留
+    * **監控需求**: 需要監控臨時關係的建立和清理狀況
+* **權限設計**:
+    * `outside_suggester` 角色只允許查看和操作其 `linked_suggestion_id` 對應的建議
+    * 不能參與聊天、查看 Workspace 其他內容或執行其他操作
+    * UI 層面不會顯示臨時成員，保持 Workspace 成員列表的純淨性
+
+````
