@@ -1,9 +1,9 @@
-# **協作式 LLM Agent 平台系統架構設計文件**
+# 協作式 LLM Agent 平台系統架構設計文件
 
-* **版本**：0.9
-* **日期**：2025年8月26日
+* 版本：0.9
+* 日期：2025年8月26日
 
-## **1.0 系統概覽**
+## 1 系統概覽
 
 ### 1.1 系統介紹
 
@@ -26,7 +26,7 @@
   * **Agent as Tool**: 透過 JSON Schema 定義介面，讓 Public Agent 可作為其他 Agent 的 Tool 使用，實現 Agent 間的協作與能力組合
 * **Editor vs Suggester**: 兩種角色，Editor 可直接修改 Agent，Suggester 只能提出建議
 
-## **2.0 系統架構設計**
+## 2 系統架構設計
 
 ### 2.1 概念 ERD (Entity Relationship Diagram)
 
@@ -40,11 +40,25 @@ erDiagram
         string name
     }
     
+    %% 分離的參與者實體
+    HUMAN {
+        string id PK
+        string username UK
+        string email UK
+    }
+    
+    AGENT {
+        string id PK
+        string name
+        string workspace_id FK "null for public agents"
+        string current_spec_id FK
+        boolean is_public
+    }
+    
     ACTOR {
         string id PK
         string type "human | agent"
-        string name
-        string workspace_id FK "null for public agents"
+        string reference_id "指向 HUMAN.id 或 AGENT.id"
     }
     
     CHAT {
@@ -64,7 +78,7 @@ erDiagram
         text prompt_text
         json model_config "{ model, temperature, reasoning_effort, ... }"
         json tools_config "工具設定（引用 TOOL_REGISTRY.id）"
-        string created_by_actor_id FK
+        string created_by_human_id FK "指向 HUMAN.id"
         datetime created_at
     }
     
@@ -88,20 +102,23 @@ erDiagram
     SPEC_SUGGESTION {
         string id PK
         string target_agent_id FK
-        string suggester_id FK
+        string suggester_id FK "指向 HUMAN.id"
         string spec_id FK "建議的 Spec 快照"
         string status "pending | accepted | rejected"
     }
 
     %% 關係
-    WORKSPACE ||--|{ ACTOR : "develops agents / has members"
+    WORKSPACE ||--|{ AGENT : "owns private agents"
+    HUMAN }|--|{ WORKSPACE : "members (via WORKSPACE_MEMBERS)"
     WORKSPACE ||--|{ CHAT : "hosts"
     CHAT }|--|{ ACTOR : "participants (many-to-many)"
-    ACTOR ||--o{ AGENT_SPEC : "agent has specs (production/draft/suggestion)"
+    HUMAN ||--o{ ACTOR : "human actors"
+    AGENT ||--o{ ACTOR : "agent actors"
+    AGENT ||--o{ AGENT_SPEC : "agent has specs (production/draft/suggestion)"
     TOOL_REGISTRY |o--o{ AGENT_SPEC : "referenced via tools_config"
-    TOOL_REGISTRY ||--o{ ACTOR : "public agents as tools"
+    TOOL_REGISTRY ||--o{ AGENT : "public agents as tools"
     CHAT ||--o{ CHAT_AGENT_DRAFT : "testing ground"
-    ACTOR ||--o{ SPEC_SUGGESTION : "suggests improvements"
+    HUMAN ||--o{ SPEC_SUGGESTION : "suggests improvements"
 ```
 
 ### 2.2 三層式 Spec 管理模型
@@ -132,7 +149,7 @@ Chat 中的 Applied Draft > Agent 的 Production Version
 * **版本獨立**: 原 Agent 更新不會影響已發布的 Public Agent
 * **跨 Workspace 建議**: 外部 Workspace 使用者可對 Public Agent 提出改進建議，透過臨時成員關係機制實現
 
-## **3.0 業務流程設計**
+## 3 業務流程設計
 
 ### 3.1 Agent 協作開發流程
 
@@ -175,28 +192,41 @@ graph LR
     E --> F[只能聊天互動，無法修改]
 ```
 
-## **4.0 技術實作規格**
+## 4 技術實作規格
 
 ### 4.1 資料庫設計原則
 
 採用關聯式資料庫，遵循以下設計原則：
 
-1. **統一參與者模型**: 人員和 Agent 統一存在 PARTICIPANT 表中
+1. **分離式參與者模型**: Human 和 Agent 分別存在專門表中，透過 ACTOR 表提供統一身份介面
 2. **事件溯源聊天**: MESSAGE 表記錄所有對話和系統事件
 3. **正規化關聯**: 使用標準的 Join Table 處理多對多關係
 4. **編輯互斥機制**: 透過鎖定機制避免並發編輯衝突
 
 ### 4.2 核心實體詳細規格
 
-**ACTOR**: 統一的參與者實體
+**HUMAN**: 使用者身份實體
+
+* 全域唯一的使用者身份，不隸屬於特定 Workspace
+* `username`, `email`: 全域唯一約束
+* 透過 `WORKSPACE_MEMBERS` 表加入多個 Workspace
+* 所有建立 Agent Spec、提出建議等操作都追蹤到具體 Human
+
+**AGENT**: AI Agent 實體
+
+* `workspace_id`: 
+  * 私有 Agent: 必填 (專屬於特定 Workspace)
+  * Public Agent: NULL (全域可用)
+* `current_spec_id`: 指向當前生效的 production AGENT_SPEC
+* `is_public`: 標識是否為 Public Agent
+* `published_at`, `published_by_workspace_id`, `published_from_agent_id`: Public Agent 發布資訊
+
+**ACTOR**: Projection Table
 
 * `type`: 'human' | 'agent'
-* `workspace_id`:
-  * Human: NULL (全域使用者，透過 WORKSPACE_MEMBERS 加入多個 Workspace)
-  * Agent: 必填 (專屬於特定 Workspace)
-  * Public Agent: NULL (全域可用)
-* **Human 專有**: `username`, `email` (全域唯一)
-- **Agent 專有**: `description`, `current_spec_id`, `is_public`, `published_at`, `published_by_workspace_id`, `published_from_agent_id`
+* `reference_id`: 指向 HUMAN.id 或 AGENT.id
+* **注意**: 此欄位無法設定資料庫外鍵約束，存在孤立記錄風險
+* 作為 Chat 和 Message 的統一參與者身份介面
 
 **WORKSPACE**: 協作工作區
 
@@ -218,14 +248,14 @@ graph LR
 * `prompt_text`: 此版本的系統提示/規格
 * `model_config`: JSON（如 `{ model, temperature, reasoning_effort, top_p, max_output_tokens, ... }`）
 * `tools_config`: JSON（陣列/物件，包含工具啟用狀態、客製參數與 `tool_id` 引用）
-* `created_by_actor_id`, `created_at`: 稽核資訊
+* `created_by_human_id`, `created_at`: 稽核資訊
 * 版本化原則：任何影響 Agent 定義的變更（含 name、description、prompt、model_config、tools_config）都需產生新的 `AGENT_SPEC` 記錄，不直接就地更新
 
 **CHAT_AGENT_DRAFT**: 聊天室專用草稿（僅保存指標與狀態）
 
 * `spec_id`: 指向存放於 `AGENT_SPEC` 的草稿內容（`spec_type='chat_draft'`）
 * `status`: 'drafting' | 'applied'
-* 編輯鎖定機制 (`locked_by_actor_id`, `locked_at`)
+* 編輯鎖定機制 (`locked_by_human_id`, `locked_at`)
 
 **TOOL_REGISTRY**: Tool 註冊表
 
@@ -257,29 +287,50 @@ graph LR
    * **編輯鎖定機制的必要性**：當多個 Editor 同時嘗試修改同一 Agent 的 Draft 時，會產生並發編輯衝突，導致修改互相覆蓋或資料不一致。透過鎖定機制確保同一時間只有一個 Editor 能編輯特定 Draft，維護資料完整性並避免使用者的工作成果遺失。
 
 4. **Human 與 Workspace 關係約束**:
-   * Human (`type='human'`) 的 `workspace_id` 必須為 NULL
+   * Human 為全域實體，透過 `WORKSPACE_MEMBERS` 加入多個 Workspace
    * Human 的 `username` 和 `email` 全域唯一
-   * Human 透過 `WORKSPACE_MEMBERS` 加入 Workspace，可擁有不同角色
-   * Agent (`type='agent'`) 的 `workspace_id` 必須非 NULL（除非是 Public Agent）
+   * Agent 的 `workspace_id` 必須非 NULL（除非是 Public Agent）
 
-5. **Public Agent 發布限制**:
+5. **Actor 資料完整性約束**:
+   * `ACTOR.reference_id` 無法設定資料庫外鍵約束
+   * 需要應用層保證 `type` 與 `reference_id` 的對應正確性
+   * 定期執行清理腳本檢查孤立記錄：
+     ```sql
+     SELECT a.* FROM actor a
+     LEFT JOIN human h ON a.type = 'human' AND a.reference_id = h.id
+     LEFT JOIN agent ag ON a.type = 'agent' AND a.reference_id = ag.id
+     WHERE h.id IS NULL AND ag.id IS NULL;
+     ```
+
+6. **Public Agent 發布限制**:
    * 名稱必須全域唯一
    * 同一原始 Agent 不可重複發布
    * 原 Agent 存在 Public Agent 時不可刪除
 
-6. **跨 Workspace 建議機制**:
-7. **Spec 版本化原則**:
-  * 所有影響 Agent 行為或定義的修改都以新增 `AGENT_SPEC` 快照方式落盤
-  * `ACTOR.current_spec_id` 僅指向最新的 production 版本；Draft/Suggestion 皆透過各自實體以 `spec_id` 參照
-
+7. **跨 Workspace 建議機制**:
    * 外部使用者對 Public Agent 建立建議時，系統自動建立臨時成員關係
    * 臨時成員角色為 `outside_suggester`，`is_temporary=true`
    * 建議被處理（accepted/rejected）後，臨時成員關係自動清理
    * `outside_suggester` 只能查看和操作其關聯的建議，無其他 Workspace 權限
 
-## **4.4 Agent as Tool 設計**
+8. **Spec 版本化原則**:
+   * 所有影響 Agent 行為或定義的修改都以新增 `AGENT_SPEC` 快照方式落盤
+   * `AGENT.current_spec_id` 僅指向最新的 production 版本；Draft/Suggestion 皆透過各自實體以 `spec_id` 參照
 
-### 4.4.1 核心概念
+9. **一致性維護機制**:
+   * 建立/刪除 Human 或 Agent 時，必須透過 Application Transaction 同步操作 ACTOR 表
+   * 建立使用者範例：
+     ```python
+     with db.transaction():
+         human = Human.create(username=username, email=email)
+         actor = Actor.create(
+             id=human.id, type='human', reference_id=human.id
+         )
+     ```
+
+### 4.4 Agent as Tool 設計
+
+#### 4.4.1 核心概念
 
 Agent as Tool 是系統的關鍵功能，允許 Public Agent 作為其他 Agent 的工具使用，實現 Agent 間的協作與能力組合。
 
@@ -289,12 +340,12 @@ Agent as Tool 是系統的關鍵功能，允許 Public Agent 作為其他 Agent 
 * 在程式實作中，所有 Tool 類型（系統 Tool、Agent Tool）都實作統一的 Interface
 * 工具啟用與客製化設定統一由 `AGENT_SPEC.tools_config` 決定
 
-### 4.4.2 業務約束
+#### 4.4.2 業務約束
 
 1. **只有 Public Agent 可作為 Tool**: 確保工具的穩定性和可用性
 4. **調用計費**: Agent Tool 的 LLM 費用計入調用方 Workspace
 
-### 4.4.3 使用情境範例
+#### 4.4.3 使用情境範例
 
 **情境**: 創建一個「市場分析專家」Agent，結合多個專業 Agent 能力
 
@@ -304,25 +355,34 @@ Agent as Tool 是系統的關鍵功能，允許 Public Agent 作為其他 Agent 
 
 通過這種設計，Agent 生態系統具備了模組化、可組合的特性，讓複雜任務能透過多個專業 Agent 協作完成。
 
-## **4.5 完整資料庫設計 (ERD)**
+### 4.5 完整資料庫設計 (ERD)
 
 以下是完整的實體關係圖，包含所有欄位和約束：
 
 ```mermaid
 erDiagram
-    ACTOR {
+    HUMAN {
         string id PK
-        string type "e.g., 'human', 'agent'"
+        string username UK
+        string email UK
+        datetime created_at
+    }
+    AGENT {
+        string id PK
         string name
-        string username UK "NULL for agents, UNIQUE for humans"
-        string email UK "NULL for agents, UNIQUE for humans"
-        string description "NULL for humans"
-        string workspace_id FK "NULL for humans and public agents"
-        string current_spec_id FK "NULL for humans"
-        boolean is_public "DEFAULT FALSE, for agents only"
+        text description
+        string workspace_id FK "NULL for public agents"
+        string current_spec_id FK
+        boolean is_public "DEFAULT FALSE"
         datetime published_at "NULL for non-public agents"
         string published_by_workspace_id FK "NULL for non-public agents"
         string published_from_agent_id FK "NULL for non-public agents"
+        datetime created_at
+    }
+    ACTOR {
+        string id PK
+        string type "human | agent"
+        string reference_id "指向 HUMAN.id 或 AGENT.id，無 FK 約束"
         datetime created_at
     }
     WORKSPACE {
@@ -332,11 +392,12 @@ erDiagram
         datetime created_at
     }
     WORKSPACE_MEMBERS {
-        string actor_id PK,FK
+        string human_id PK,FK
         string workspace_id PK,FK
         string role "e.g., 'editor', 'suggester', 'outside_suggester'"
         boolean is_temporary "DEFAULT FALSE, for outside_suggester"
         string linked_suggestion_id FK "NULL for permanent members"
+        datetime created_at
     }
     TOOL_REGISTRY {
         string id PK
@@ -357,7 +418,7 @@ erDiagram
         text prompt_text
         json model_config "{ model, temperature, reasoning_effort, ... }"
         json tools_config "array/object with tool enablement and custom settings"
-        string created_by_actor_id FK
+        string created_by_human_id FK
         datetime created_at
     }
     CHAT {
@@ -369,6 +430,7 @@ erDiagram
     CHAT_ACTORS {
         string chat_id PK,FK
         string actor_id PK,FK
+        datetime created_at
     }
     MESSAGE {
         string id PK
@@ -383,7 +445,7 @@ erDiagram
         string id PK
         string chat_id FK
         string target_agent_id FK
-        string suggester_id FK
+        string suggester_id FK "HUMAN.id"
         string spec_id FK "the proposed spec snapshot"
         text ai_generated_summary "Auto-generated summary of changes"
         string status "e.g., 'pending', 'accepted', 'rejected'"
@@ -394,35 +456,37 @@ erDiagram
         string agent_id PK,FK
         string spec_id FK "content lives in AGENT_SPEC"
         string status "e.g., 'drafting', 'applied'"
-        string created_by_actor_id FK
-        string locked_by_actor_id FK "NULL when not locked"
+        string created_by_human_id FK
+        string locked_by_human_id FK "NULL when not locked"
         datetime locked_at "NULL when not locked"
         datetime updated_at
     }
 
     %% Relationships
-    ACTOR }|--|{ WORKSPACE_MEMBERS : "human joins multiple workspaces"
+    HUMAN }|--|{ WORKSPACE_MEMBERS : "joins multiple workspaces"
     WORKSPACE ||--|{ WORKSPACE_MEMBERS : "contains members"
     WORKSPACE ||--|{ CHAT : "hosts"
-    WORKSPACE |o--|{ ACTOR : "owns agents"
-    ACTOR ||--|{ AGENT_SPEC : "has specs (agents)"
-    ACTOR |o--|| AGENT_SPEC : "has current (agents)"
-    ACTOR |o--|{ AGENT_SPEC : "creates"
+    WORKSPACE |o--|{ AGENT : "owns private agents"
+    HUMAN ||--o{ ACTOR : "human actors"
+    AGENT ||--o{ ACTOR : "agent actors"
+    AGENT ||--|{ AGENT_SPEC : "has specs"
+    AGENT |o--|| AGENT_SPEC : "current spec"
+    HUMAN ||--|{ AGENT_SPEC : "creates"
     TOOL_REGISTRY |o--o{ AGENT_SPEC : "referenced in tools_config"
-    TOOL_REGISTRY |o--|| ACTOR : "public agent as tool source"
+    TOOL_REGISTRY |o--|| AGENT : "public agent as tool source"
     CHAT }|--|{ CHAT_ACTORS : "has"
     ACTOR }|--|{ CHAT_ACTORS : "participates"
     CHAT ||--|{ MESSAGE : "contains"
     CHAT ||--|{ SPEC_SUGGESTION : "generates"
-    ACTOR ||--|{ SPEC_SUGGESTION : "suggests"
-    ACTOR ||--|{ SPEC_SUGGESTION : "is target of (agents)"
+    HUMAN ||--|{ SPEC_SUGGESTION : "suggests"
+    AGENT ||--|{ SPEC_SUGGESTION : "is target of"
     CHAT ||--|{ CHAT_AGENT_DRAFT : "has draft for"
-    ACTOR ||--|{ CHAT_AGENT_DRAFT : "has draft in (agents)"
-    ACTOR |o--|{ CHAT_AGENT_DRAFT : "creates"
-    ACTOR |o--|{ CHAT_AGENT_DRAFT : "locks for editing"
+    AGENT ||--|{ CHAT_AGENT_DRAFT : "has draft in"
+    HUMAN |o--|{ CHAT_AGENT_DRAFT : "creates"
+    HUMAN |o--|{ CHAT_AGENT_DRAFT : "locks for editing"
 ```
 
-## **5.0 詳細業務流程**
+## 5 詳細業務流程
 
 ### 5.1 建立聊天室流程
 
@@ -600,7 +664,7 @@ graph TD
     C3 --> F[流程結束]
 ```
 
-## **6.0 待開發事項與決策**
+## 6 待開發事項與決策
 
 ### 6.1 高優先級待開發功能
 
@@ -629,9 +693,24 @@ graph TD
 
 ### 6.2 技術實作細節確認
 
-* **Human 全域唯一性**: `username` 和 `email` 透過資料庫 UNIQUE 約束保證全域唯一
+* **Actor 資料完整性**: `ACTOR.reference_id` 無法設定資料庫外鍵約束，需要應用層保證一致性
+* **一致性維護策略**: 採用 Application Transaction 確保 Human/Agent 與 Actor 的同步建立
 * **權限檢查邏輯**: Human 的 Workspace 權限透過 `WORKSPACE_MEMBERS` 表查詢 `role` 欄位
 * **Chat 參與者查詢**: 需要區分 Human（透過 WORKSPACE_MEMBERS 關聯）和 Agent（透過 workspace_id 直接關聯）
+* **查詢效能優化**: 透過 View 或 Materialized View 解決聊天載入時的 N+1 查詢問題：
+  ```sql
+  CREATE VIEW actor_details AS
+  SELECT 
+      a.id, a.type,
+      CASE WHEN a.type = 'human' THEN h.username
+           WHEN a.type = 'agent' THEN ag.name END as display_name,
+      CASE WHEN a.type = 'human' THEN h.email  
+           WHEN a.type = 'agent' THEN ag.description END as secondary_info
+  FROM actor a
+  LEFT JOIN human h ON a.type = 'human' AND a.reference_id = h.id
+  LEFT JOIN agent ag ON a.type = 'agent' AND a.reference_id = ag.id;
+  ```
+* **孤立記錄檢查**: 定期執行清理腳本，檢查和修復 Actor 指向不存在記錄的情況
 * **Tool 系統整合點**:
   * Tool 使用指引與啟用設定統一存於 `AGENT_SPEC.tools_config`，並隨 Spec 版本化
   * Tool 調用採用 OpenAI 標準格式，支援 `tool_calls` 和 `tool_call_id` 追蹤
@@ -658,11 +737,11 @@ graph TD
 - **自動切換為 RAG（選項）**：當超限時，將歷史訊息增量向量化並寫入檢索索引；後續回應改走 RAG 管線，以「當前請求 + 檢索到的 Top-K 相關歷史 + 關鍵系統事件」組裝模型上下文。此模式需保留最近數回合與重要事件，並於 UI 明示已啟用 RAG。
 
 
-## **附錄：架構決策紀錄 (ADR)**
+## 附錄：架構決策紀錄 (ADR)
 
-### **ADR-001：採用統一參與者模型 (Unified Actor Model)**
+### ADR-001：採用統一參與者模型 (Unified Actor Model)
 
-* **狀態**：已接受
+* **狀態**：已推翻
 * **背景**：原設計中 `HUMAN` 和 `AGENT` 是分離的實體。這導致在處理如聊天參與者、權限分配等場景時，需要進行多型關聯查詢，增加了後端邏輯的複雜性和潛在的效能問題。
 * **決策**：廢棄 `HUMAN` 和 `AGENT` 兩個獨立的表，引入一個統一的 `ACTOR` 表。透過 `type` 欄位（'human', 'agent'）來区分不同類型的參與者。特定於類型的屬性（如 human 的 `email`，agent 的 `description`）作為可為空的欄位存在於該表中。
 * **後果**:
@@ -673,7 +752,7 @@ graph TD
   * **缺點**:
     * **稀疏欄位**: 表中會存在「稀疏欄位」（Sparse Columns），即某些行在特定於類型的欄位上值為 NULL。但現代資料庫對 NULL 值的儲存和索引優化已非常高效，這在實踐中通常不是問題。
 
-### **ADR-002：追蹤草稿建立者資訊**
+### ADR-002：追蹤草稿建立者資訊
 
 * **狀態**：已接受
 * **背景**：在 `CHAT_AGENT_DRAFT` 實體中，我們紀錄了特定聊天室中特定 Agent 的草稿內容和狀態，但缺少了「這份草稿是由誰建立或最後修改的」這一關鍵資訊。
@@ -684,7 +763,7 @@ graph TD
     * **支援未來功能**: 為將來可能的多 `editor` 並發編輯場景、精細化權限控制（如「只有草稿建立者才能編輯」）以及定向通知系統（如通知 `editor` 有人修改了他的草稿）奠定了基礎。
     * **低成本高效益**: 實作成本極低（增加一個外鍵欄位），但為系統的健壯性和未來擴展性帶來了巨大價值。
 
-### **ADR-003：Public Agent 採用發布分離模式**
+### ADR-003：Public Agent 採用發布分離模式
 
 * **狀態**：已接受
 * **背景**：系統需要一種機制讓一個 Workspace 創建的優秀 Agent 能被其他 Workspace 使用。我們需要決定這種「使用」的邊界和形式，以平衡靈活性和複雜性。
@@ -703,7 +782,7 @@ graph TD
     * 發布時只複製當前生效的 Spec 快照（production），版本號從 1 重新開始
     * 原 Workspace 存在 Public Agent 時不可刪除，必須先下架所有 Public Agent
 
-### **ADR-004：聊天紀錄採用 JSON 事件載體設計**
+### ADR-004：聊天紀錄採用 JSON 事件載體設計
 
 * **狀態**：已接受
 * **背景**：聊天室不僅需要記錄文字對話，還需要記錄一系列系統操作（如「草稿已更新」、「新版本已儲存」）。這些事件的結構各不相同，需要一種靈活的方式來儲存。
@@ -717,7 +796,7 @@ graph TD
     * **查詢效能**: 對 `payload` 欄位內的特定資料進行複雜查詢，效能可能低於傳統的結構化欄位。但在主要為追加寫、順序讀的場景下，這是可接受的。
     * **資料一致性**: 需要在應用層確保寫入 `payload` 的資料結構是有效的。
 
-### **ADR-005：實作三層式 Spec 管理模型**
+### ADR-005：實作三層式 Spec 管理模型
 
 * **狀態**：已接受
 * **背景**：系統核心功能是在聊天中協作迭代 Agent Spec。需要一個機制，既能儲存正式版本，又允許在特定聊天中進行無風險測試，同時還能儲存未完成的編輯。
@@ -734,7 +813,7 @@ graph TD
     * **邏輯複雜**: Agent 決定使用哪個 Spec 的邏輯鏈變長。
     * **UI/UX 挑戰**: 前端需要清晰地向使用者展示當前 Agent 的生效狀態。
 
-### **ADR-006：採用正規化 Join Table 處理多對多關係**
+### ADR-006：採用正規化 Join Table 處理多對多關係
 
 * **狀態**：已接受
 * **背景**：系統需要處理多種多對多關係，如 Workspace 與 Actor、Chat 與 Actor。
@@ -746,7 +825,7 @@ graph TD
     * **屬性附著**: 可以在關聯關係上附加屬性（如 `WORKSPACE_MEMBERS.role`）。
   * **替代方案**: 曾考慮在父實體中使用 ID 陣列，但因其違反第一正規化、難以查詢和維護而被拒絕。
 
-### **ADR-007：Draft 編輯互斥機制**
+### ADR-007：Draft 編輯互斥機制
 
 * **狀態**：已接受
 * **背景**：在 Chat 中，多個 Editor 可能同時想要編輯同一個 Agent 的 Draft，需要防止並發編輯衝突。
@@ -763,7 +842,7 @@ graph TD
     * **增加複雜性**: 需要額外的鎖定管理邏輯
     * **用戶等待**: Editor 可能需要等待其他人完成編輯
 
-### **ADR-008：邊界情況處理策略**
+### ADR-008：邊界情況處理策略
 
 * **狀態**：已接受
 * **背景**：系統中存在多個邊界情況需要明確處理策略，包括 Agent 刪除限制、編輯鎖定範圍、Public Agent 重複發布等。
@@ -782,7 +861,7 @@ graph TD
     * **使用者體驗**: 某些操作會因約束而被阻止，需要 UI 層提供清楚的錯誤說明
     * **運維複雜度**: Workspace 解散需要預先下架所有 Public Agent
 
-### **ADR-010：Human 與 Workspace 的多對多關係設計**
+### ADR-010：Human 與 Workspace 的多對多關係設計
 
 * **狀態**：已接受
 * **背景**：原設計中 Human 透過 `ACTOR.workspace_id` 綁定到特定 Workspace，導致同一真實使用者在不同 Workspace 中會是不同實體。這造成使用者體驗不佳，無法追蹤跨 Workspace 活動，且違反了真實世界的使用模式。
@@ -806,7 +885,7 @@ graph TD
     * 權限檢查邏輯：`SELECT role FROM workspace_members WHERE actor_id = ? AND workspace_id = ?`
     * Chat 參與者查詢需要區分：Human 透過 WORKSPACE_MEMBERS 關聯，Agent 透過 workspace_id 直接關聯
 
-### **ADR-011：Agent Tool 系統採用混合模式設計與 Agent as Tool**
+### ADR-011：Agent Tool 系統採用混合模式設計與 Agent as Tool
 
 * **狀態**：已接受
 * **背景**：系統需要支援 Agent 調用外部工具來擴展能力，如網頁抓取、檔案操作、甚至調用其他 Agent。同時需要實現 Agent as Tool 概念，讓 Public Agent 能作為其他 Agent 的工具使用。需要設計一個既支援 Tool 複用，又允許 Agent 客製化使用方式的機制。
@@ -834,7 +913,7 @@ graph TD
     * 實作調用深度限制和超時控制，防止無限遞迴和資源濫用
     * 所有 Tool 類型在程式中實作統一的 `Tool` Interface
 
-### **ADR-012：跨 Workspace Public Agent 建議機制採用臨時成員關係模式**
+### ADR-012：跨 Workspace Public Agent 建議機制採用臨時成員關係模式
 
 * **狀態**：已接受
 * **背景**：系統需要支援外部 Workspace 使用者對 Public Agent 提出改進建議，但現有的建議機制（SPEC_SUGGESTION）需要建議者是目標 Workspace 的成員才能滿足外鍵約束。同時需要平衡功能需求與 Workspace 封閉性原則。
@@ -858,4 +937,31 @@ graph TD
     * 不能參與聊天、查看 Workspace 其他內容或執行其他操作
     * UI 層面不會顯示臨時成員，保持 Workspace 成員列表的純淨性
 
-````
+### ADR-013：推翻統一參與者模型，採用分離模式 + Projection Table
+
+* **狀態**：已接受
+* **背景**：原 ADR-001 採用統一 ACTOR 表設計，雖然簡化了查詢和外鍵管理，但在實際分析中發現存在嚴重的職責混合問題：User 和 Agent 的需求完全不同，強行合併導致大量稀疏欄位、查詢時需要型別過濾、維護複雜度高。
+* **決策**：推翻 ADR-001，採用分離模式設計：
+  1. **HUMAN 表**：專門處理使用者身份認證、帳號管理等需求
+  2. **AGENT 表**：專門處理 AI Agent 的 Prompt、配置、版本管理等需求  
+  3. **ACTOR 表**：作為 Projection Table，統一管理聊天參與者身份，透過 `type` 和 `reference_id` 指向實際的 HUMAN 或 AGENT 記錄
+* **設計理念**：
+  * **寫模型**：HUMAN 和 AGENT 表作為資料的真實來源，各自處理專業領域邏輯
+  * **讀模型**：ACTOR 表針對聊天場景提供統一身份介面，類似 CQRS 的讀寫分離概念
+  * **查詢優化**：透過 View 解決 N+1 查詢問題，提供統一的參與者詳情檢視
+* **後果**:
+  * **優點**:
+    * **職責清晰**: USER/AGENT 各自專注核心領域，無冗餘欄位
+    * **資料正規化**: 符合關聯式資料庫設計最佳實踐
+    * **擴展性**: 新增參與者類型時影響範圍可控
+    * **查詢效能**: 透過 View 可解決聊天載入的 N+1 問題
+  * **缺點**:
+    * **一致性維護**: 需要透過 Application Transaction 保證 HUMAN/AGENT 與 ACTOR 同步
+    * **外鍵約束缺失**: `ACTOR.reference_id` 無法設定資料庫層外鍵約束，存在孤立記錄風險
+    * **查詢複雜度**: 需要詳細資訊時須進行多表 JOIN 操作
+    * **型別安全**: `type` 與 `reference_id` 對應正確性依賴應用層保證
+* **風險緩解策略**:
+  * 使用 Application Transaction 確保建立/刪除操作的原子性
+  * 建立定期清理腳本檢查和修復孤立記錄
+  * 透過 View 或 Materialized View 優化高頻查詢效能
+  * 在應用層實作嚴格的型別檢查和驗證機制
