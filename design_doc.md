@@ -24,6 +24,7 @@
 * **Agent**: 可被協作開發的 AI 助手，有自己的版本歷史，可配置使用不同的 Tool
 * **Tool**: Agent 可調用的功能工具，包括系統內建功能（如網頁抓取、檔案操作）和 Agent as Tool（Public Agent 作為工具被其他 Agent 調用）
   * **Agent as Tool**: 透過 JSON Schema 定義介面，讓 Public Agent 可作為其他 Agent 的 Tool 使用，實現 Agent 間的協作與能力組合
+* **Knowledge Base（知識庫）**: Agent 的語義搜尋資料來源，分為 Workspace 共享知識庫和 Agent 專屬知識庫，支援文件上傳與向量化檢索
 * **Editor vs Suggester**: 兩種角色，Editor 可直接修改 Agent，Suggester 只能提出建議
 
 ## 2 系統架構設計
@@ -92,6 +93,44 @@ erDiagram
         json tool_schema
     }
     
+    %% 知識庫系統
+    KNOWLEDGE_BASE {
+        string id PK
+        string name
+        text description
+        string workspace_id FK "NULL for public agent knowledge bases"
+        string owner_agent_id FK "NULL for workspace knowledge bases"
+        string embedding_model "e.g., text-embedding-3-large"
+        json search_config "default similarity threshold, top_k, etc."
+        datetime created_at
+        datetime updated_at
+    }
+    
+    KNOWLEDGE_FILE {
+        string id PK
+        string knowledge_base_id FK
+        string title
+        text content
+        string content_type "text | markdown | pdf | html"
+        string source_type "upload | web_scrape | chat_export"
+        string source_url "NULL for uploads"
+        json metadata "file size, upload user, scrape timestamp, etc."
+        string checksum "for duplicate detection"
+        datetime created_at
+        datetime updated_at
+    }
+    
+    KNOWLEDGE_CHUNK {
+        string id PK
+        string file_id FK
+        text content
+        int chunk_index "sequence within file"
+        int token_count
+        vector embedding "pgvector type for PostgreSQL"
+        json metadata "chunk-specific metadata"
+        datetime created_at
+    }
+    
     %% 協作機制
     CHAT_AGENT_DRAFT {
         string chat_id PK, FK
@@ -121,6 +160,12 @@ erDiagram
     TOOL_REGISTRY ||--o{ AGENT : "public agents as tools"
     CHAT ||--o{ CHAT_AGENT_DRAFT : "testing ground"
     USER ||--o{ SPEC_SUGGESTION : "suggests improvements"
+    
+    %% 知識庫關係
+    WORKSPACE ||--o{ KNOWLEDGE_BASE : "workspace knowledge bases"
+    AGENT ||--o{ KNOWLEDGE_BASE : "agent-specific knowledge bases"
+    KNOWLEDGE_BASE ||--|{ KNOWLEDGE_FILE : "contains files"
+    KNOWLEDGE_FILE ||--|{ KNOWLEDGE_CHUNK : "split into chunks"
 ```
 
 ### 2.2 三層式 Spec 管理模型
@@ -378,7 +423,38 @@ Agent as Tool 是系統的關鍵功能，允許 Public Agent 作為其他 Agent 
 
 通過這種設計，Agent 生態系統具備了模組化、可組合的特性，讓複雜任務能透過多個專業 Agent 協作完成。
 
-### 4.5 完整資料庫設計 (ERD)
+### 4.5 知識庫系統設計
+
+#### 4.5.1 核心概念
+
+知識庫系統為 Agent 提供語義搜尋能力，支援：
+* **Workspace 共享知識庫**：團隊共同維護的知識資源
+* **Agent 專屬知識庫**：隨 Agent 一起發布的專業知識
+* **文件上傳與向量化**：支援多種格式的知識文件
+* **語義搜尋工具**：透過 `semantic_search` 工具主動檢索
+
+#### 4.5.2 設計約束
+
+1. **一對一關係**：每個 Agent 最多擁有一個專屬知識庫
+2. **複製策略**：Public Agent 發布時完整複製知識庫內容
+3. **Workspace 隔離**：知識庫嚴格按 Workspace 權限控制
+4. **統一向量模型**：使用 OpenAI text-embedding-3-large (3072 維)
+
+#### 4.5.3 檢索權限範圍
+
+Agent 可檢索的知識庫：
+* **所屬 Workspace 的共享知識庫**
+* **自己的專屬知識庫**
+* **被調用 Public Agent 的知識庫**（透過 Agent as Tool）
+
+#### 4.5.4 技術實作
+
+* **向量儲存**：PostgreSQL + pgvector 擴展
+* **分塊策略**：文件切分為可檢索的語義單元
+* **去重機制**：基於 checksum 避免重複上傳
+* **批次處理**：向量化作業採用背景任務處理
+
+### 4.6 完整資料庫設計 (ERD)
 
 以下是完整的實體關係圖，包含所有欄位和約束：
 
@@ -430,6 +506,40 @@ erDiagram
         string tool_type "system | workspace | agent"
         json tool_schema
         string source_agent_id FK "NULL for non-agent tools"
+        datetime created_at
+    }
+    KNOWLEDGE_BASE {
+        string id PK
+        string name
+        text description
+        string workspace_id FK "NULL for public agent knowledge bases"
+        string owner_agent_id FK "NULL for workspace knowledge bases"
+        string embedding_model "e.g., text-embedding-3-large"
+        json search_config "default similarity threshold, top_k, etc."
+        datetime created_at
+        datetime updated_at
+    }
+    KNOWLEDGE_FILE {
+        string id PK
+        string knowledge_base_id FK
+        string title
+        text content
+        string content_type "text | markdown | pdf | html"
+        string source_type "upload | web_scrape | chat_export"
+        string source_url "NULL for uploads"
+        json metadata "file size, upload user, scrape timestamp, etc."
+        string checksum "for duplicate detection"
+        datetime created_at
+        datetime updated_at
+    }
+    KNOWLEDGE_CHUNK {
+        string id PK
+        string file_id FK
+        text content
+        int chunk_index "sequence within file"
+        int token_count
+        vector embedding "pgvector type for PostgreSQL"
+        json metadata "chunk-specific metadata"
         datetime created_at
     }
     AGENT_SPEC {
@@ -513,6 +623,10 @@ erDiagram
     AGENT ||--|{ CHAT_AGENT_DRAFT : "has draft in"
     USER |o--|{ CHAT_AGENT_DRAFT : "creates"
     USER |o--|{ CHAT_AGENT_DRAFT : "locks for editing"
+    WORKSPACE ||--o{ KNOWLEDGE_BASE : "workspace knowledge bases"
+    AGENT ||--o{ KNOWLEDGE_BASE : "agent-specific knowledge bases"
+    KNOWLEDGE_BASE ||--|{ KNOWLEDGE_FILE : "contains files"
+    KNOWLEDGE_FILE ||--|{ KNOWLEDGE_CHUNK : "split into chunks"
 ```
 
 ## 5 詳細業務流程
