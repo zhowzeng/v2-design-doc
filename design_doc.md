@@ -57,8 +57,9 @@ erDiagram
     
     ACTOR {
         string id PK
-        string type "user | agent"
-        string reference_id "指向 USER.id 或 AGENT.id"
+        string type "user | agent | system | tool"
+        string reference_id "指向 USER.id, AGENT.id, 或 TOOL_REGISTRY.id；system時為NULL"
+        string display_name "統一顯示名稱"
     }
     
     CHAT {
@@ -114,6 +115,7 @@ erDiagram
     CHAT }|--|{ ACTOR : "participants (many-to-many)"
     USER ||--o{ ACTOR : "user actors"
     AGENT ||--o{ ACTOR : "agent actors"
+    TOOL_REGISTRY ||--o{ ACTOR : "tool actors"
     AGENT ||--o{ AGENT_SPEC : "agent has specs (production/draft/suggestion)"
     TOOL_REGISTRY |o--o{ AGENT_SPEC : "referenced via tools_config"
     TOOL_REGISTRY ||--o{ AGENT : "public agents as tools"
@@ -198,8 +200,8 @@ graph LR
 
 採用關聯式資料庫，遵循以下設計原則：
 
-1. **分離式參與者模型**: User 和 Agent 分別存在專門表中，透過 ACTOR 表提供統一身份介面
-2. **事件溯源聊天**: MESSAGE 表記錄所有對話和系統事件
+1. **分離式參與者模型**: User、Agent、System、Tool 分別存在專門表中，透過 ACTOR 表提供統一身份介面
+2. **事件溯源聊天**: MESSAGE 表記錄所有對話和系統事件，對齊 OpenAI Harmony 格式
 3. **正規化關聯**: 使用標準的 Join Table 處理多對多關係
 4. **編輯互斥機制**: 透過鎖定機制避免並發編輯衝突
 
@@ -223,10 +225,16 @@ graph LR
 
 **ACTOR**: Projection Table
 
-* `type`: 'user' | 'agent'
-* `reference_id`: 指向 USER.id 或 AGENT.id
+* `type`: 'user' | 'agent' | 'system' | 'tool'
+* `reference_id`: 指向 USER.id、AGENT.id 或 TOOL_REGISTRY.id；system 類型時為 NULL
+* `display_name`: 統一顯示名稱，用於聊天介面展示
 * **注意**: 此欄位無法設定資料庫外鍵約束，存在孤立記錄風險
 * 作為 Chat 和 Message 的統一參與者身份介面
+* **Actor 類型說明**:
+  * `user`: 真實使用者，reference_id 指向 USER.id
+  * `agent`: AI Agent，reference_id 指向 AGENT.id  
+  * `system`: 系統訊息，reference_id 為 NULL，用於知識截止時間、推理等級等系統配置
+  * `tool`: Tool 執行回應，reference_id 指向 TOOL_REGISTRY.id
 
 **WORKSPACE**: 協作工作區
 
@@ -294,12 +302,15 @@ graph LR
 5. **Actor 資料完整性約束**:
    * `ACTOR.reference_id` 無法設定資料庫外鍵約束
    * 需要應用層保證 `type` 與 `reference_id` 的對應正確性
+   * `system` 類型的 Actor 其 `reference_id` 為 NULL
    * 定期執行清理腳本檢查孤立記錄：
      ```sql
      SELECT a.* FROM actor a
      LEFT JOIN user u ON a.type = 'user' AND a.reference_id = u.id
      LEFT JOIN agent ag ON a.type = 'agent' AND a.reference_id = ag.id
-     WHERE u.id IS NULL AND ag.id IS NULL;
+     LEFT JOIN tool_registry t ON a.type = 'tool' AND a.reference_id = t.id
+     WHERE a.type != 'system' 
+       AND u.id IS NULL AND ag.id IS NULL AND t.id IS NULL;
      ```
 
 6. **Public Agent 發布限制**:
@@ -318,14 +329,26 @@ graph LR
    * `AGENT.current_spec_id` 僅指向最新的 production 版本；Draft/Suggestion 皆透過各自實體以 `spec_id` 參照
 
 9. **一致性維護機制**:
-   * 建立/刪除 User 或 Agent 時，必須透過 Application Transaction 同步操作 ACTOR 表
+   * 建立/刪除 User、Agent 或 Tool 時，必須透過 Application Transaction 同步操作 ACTOR 表
+   * 系統啟動時自動建立 System Actor（`type='system'`, `reference_id=NULL`）
    * 建立使用者範例：
      ```python
      with db.transaction():
          user = User.create(username=username, email=email)
          actor = Actor.create(
-             id=user.id, type='user', reference_id=user.id
+             id=user.id, type='user', reference_id=user.id, 
+             display_name=user.username
          )
+     ```
+   * Tool 首次被調用時自動建立對應 Actor：
+     ```python
+     with db.transaction():
+         if not Actor.exists(type='tool', reference_id=tool_id):
+             tool = ToolRegistry.get(tool_id)
+             actor = Actor.create(
+                 type='tool', reference_id=tool_id,
+                 display_name=tool.name
+             )
      ```
 
 ### 4.4 Agent as Tool 設計
@@ -381,8 +404,9 @@ erDiagram
     }
     ACTOR {
         string id PK
-        string type "user | agent"
-        string reference_id "指向 USER.id 或 AGENT.id，無 FK 約束"
+        string type "user | agent | system | tool"
+        string reference_id "指向對應實體ID，system時為NULL，無FK約束"
+        string display_name "統一顯示名稱"
         datetime created_at
     }
     WORKSPACE {
@@ -435,10 +459,14 @@ erDiagram
     MESSAGE {
         string id PK
         string chat_id FK
-        string author_id "Actor ID or NULL for system"
-        string author_type "e.g., 'actor', 'system'"
-        string type "e.g., 'TEXT_MESSAGE', 'TOOL_CALL', 'TOOL_RESPONSE'"
-        json payload "stores message content or event data"
+        string author_id FK "統一指向 ACTOR.id"
+        string role "system | developer | user | assistant | tool (OpenAI Harmony)"
+        string channel "analysis | commentary | final (OpenAI Harmony)"
+        string recipient "tool calls: functions.tool_name"
+        string content_type "text | json | structured"
+        text content "訊息內容"
+        json metadata "額外結構化資料"
+        string tool_call_id "關聯 tool call 與 response"
         datetime created_at
     }
     SPEC_SUGGESTION {
@@ -469,6 +497,7 @@ erDiagram
     WORKSPACE |o--|{ AGENT : "owns private agents"
     USER ||--o{ ACTOR : "user actors"
     AGENT ||--o{ ACTOR : "agent actors"
+    TOOL_REGISTRY ||--o{ ACTOR : "tool actors"
     AGENT ||--|{ AGENT_SPEC : "has specs"
     AGENT |o--|| AGENT_SPEC : "current spec"
     USER ||--|{ AGENT_SPEC : "creates"
@@ -701,19 +730,27 @@ graph TD
   ```sql
   CREATE VIEW actor_details AS
   SELECT 
-      a.id, a.type,
+      a.id, a.type, a.display_name,
       CASE WHEN a.type = 'user' THEN u.username
-           WHEN a.type = 'agent' THEN ag.name END as display_name,
+           WHEN a.type = 'agent' THEN ag.name 
+           WHEN a.type = 'system' THEN 'System'
+           WHEN a.type = 'tool' THEN t.name END as actual_name,
       CASE WHEN a.type = 'user' THEN u.email  
-           WHEN a.type = 'agent' THEN ag.description END as secondary_info
+           WHEN a.type = 'agent' THEN ag.description 
+           WHEN a.type = 'tool' THEN t.description
+           ELSE NULL END as secondary_info
   FROM actor a
   LEFT JOIN user u ON a.type = 'user' AND a.reference_id = u.id
-  LEFT JOIN agent ag ON a.type = 'agent' AND a.reference_id = ag.id;
+  LEFT JOIN agent ag ON a.type = 'agent' AND a.reference_id = ag.id
+  LEFT JOIN tool_registry t ON a.type = 'tool' AND a.reference_id = t.id;
   ```
 * **孤立記錄檢查**: 定期執行清理腳本，檢查和修復 Actor 指向不存在記錄的情況
 * **Tool 系統整合點**:
   * Tool 使用指引與啟用設定統一存於 `AGENT_SPEC.tools_config`，並隨 Spec 版本化
-  * Tool 調用採用 OpenAI 標準格式，支援 `tool_calls` 和 `tool_call_id` 追蹤
+  * Tool 調用採用 OpenAI Harmony 標準格式，支援 `tool_call_id` 追蹤調用與回應的對應關係
+  * Message 採用標準的 role 和 channel 設計：
+    * Agent 調用 Tool: `role='assistant'`, `channel='commentary'`, `recipient='functions.tool_name'`
+    * Tool 回應: `role='tool'`, `channel='commentary'`, `author_id` 指向 Tool Actor
   * Agent 執行時依「生效的 AGENT_SPEC」載入啟用工具（由 tools_config 篩選）
   * Tool 配置的協作變更以建立/更新 chat draft 專用 `AGENT_SPEC` 版本進行
 * **Spec 全量快照原則**: name/description/prompt/model_config/tools_config 的任何更動都以新增 `AGENT_SPEC` 記錄呈現（不可就地改寫）
@@ -736,6 +773,39 @@ graph TD
   - 對 Agent 對話品質的影響評估
 - **自動切換為 RAG（選項）**：當超限時，將歷史訊息增量向量化並寫入檢索索引；後續回應改走 RAG 管線，以「當前請求 + 檢索到的 Top-K 相關歷史 + 關鍵系統事件」組裝模型上下文。此模式需保留最近數回合與重要事件，並於 UI 明示已啟用 RAG。
 
+
+### ADR-014：Message 系統對齊 OpenAI Harmony 格式並擴展 Actor 支援 System 和 Tool
+
+* **狀態**：已接受
+* **背景**：原設計中 MESSAGE 表使用 `author_type` 和 `payload` 的事件載體模式，但隨著對 OpenAI Harmony 格式的深入了解，發現其五種標準 Role（system, developer, user, assistant, tool）和三種 Channel（analysis, commentary, final）設計更適合我們的協作 Agent 場景。同時，系統訊息使用 NULL author 的設計不夠一致。
+* **決策**：全面改造 Message 系統以對齊 OpenAI Harmony 格式：
+  1. **擴展 ACTOR 類型**：新增 `system` 和 `tool` 兩種 Actor 類型
+  2. **統一 author 模型**：所有 Message 的 `author_id` 都指向 ACTOR 表，移除 `author_type` 欄位
+  3. **採用 Harmony Role**：使用 `role` 欄位支援五種標準角色
+  4. **新增 Channel 支援**：透過 `channel` 欄位支援 CoT 分離和多通道輸出
+  5. **Tool 調用追蹤**：透過 `tool_call_id`、`recipient` 等欄位完整支援 Tool 調用流程
+* **Actor 類型定義**：
+  * `system`: 系統配置訊息，`reference_id=NULL`，用於知識截止時間、推理等級等
+  * `tool`: Tool 執行回應，`reference_id` 指向 `TOOL_REGISTRY.id`
+  * `user`: 真實使用者（保持不變）
+  * `agent`: AI Agent（保持不變）
+* **Message 使用模式**：
+  * System 訊息：`role='system'`, `author_id` 指向 System Actor
+  * Tool 調用：`role='assistant'`, `channel='commentary'`, `recipient='functions.tool_name'`
+  * Tool 回應：`role='tool'`, `channel='commentary'`, `author_id` 指向 Tool Actor
+  * CoT 推理：`role='assistant'`, `channel='analysis'`
+  * 最終回應：`role='assistant'`, `channel='final'`
+* **後果**:
+  * **優點**:
+    * **標準對齊**: 完全符合 OpenAI Harmony 規範，確保與主流 LLM 生態一致性
+    * **身份統一**: 所有訊息都有明確的 Actor 身份，便於權限控制和稽核追蹤
+    * **CoT 支援**: 原生支援 Chain of Thought 的分離展示和處理
+    * **Tool 追蹤**: 完整的 Tool 調用鏈追蹤，便於除錯和監控
+    * **擴展性**: 為未來支援更多 LLM 特性（如 reasoning、structured output）奠定基礎
+  * **缺點**:
+    * **複雜度增加**: Actor 類型增加後，應用層需要處理更多種類的身份管理
+    * **資料遷移**: 需要遷移現有的 Message 資料結構
+    * **一致性挑戰**: Tool Actor 的生命週期管理需要額外設計
 
 ## 附錄：架構決策紀錄 (ADR)
 
@@ -944,19 +1014,21 @@ graph TD
 * **決策**：推翻 ADR-001，採用分離模式設計：
   1. **USER 表**：專門處理使用者身份認證、帳號管理等需求
   2. **AGENT 表**：專門處理 AI Agent 的 Prompt、配置、版本管理等需求  
-  3. **ACTOR 表**：作為 Projection Table，統一管理聊天參與者身份，透過 `type` 和 `reference_id` 指向實際的 USER 或 AGENT 記錄
+  3. **TOOL_REGISTRY 表**：專門處理工具定義、Schema、配置等需求
+  4. **ACTOR 表**：作為 Projection Table，統一管理聊天參與者身份（user/agent/system/tool），透過 `type` 和 `reference_id` 指向實際記錄
 * **設計理念**：
-  * **寫模型**：USER 和 AGENT 表作為資料的真實來源，各自處理專業領域邏輯
+  * **寫模型**：USER、AGENT、TOOL_REGISTRY 表作為資料的真實來源，各自處理專業領域邏輯
   * **讀模型**：ACTOR 表針對聊天場景提供統一身份介面，類似 CQRS 的讀寫分離概念
   * **查詢優化**：透過 View 解決 N+1 查詢問題，提供統一的參與者詳情檢視
 * **後果**:
   * **優點**:
-    * **職責清晰**: USER/AGENT 各自專注核心領域，無冗餘欄位
+    * **職責清晰**: USER/AGENT/TOOL_REGISTRY 各自專注核心領域，無冗餘欄位
     * **資料正規化**: 符合關聯式資料庫設計最佳實踐
     * **擴展性**: 新增參與者類型時影響範圍可控
     * **查詢效能**: 透過 View 可解決聊天載入的 N+1 問題
+    * **統一介面**: 所有聊天參與者都有一致的身份模型
   * **缺點**:
-    * **一致性維護**: 需要透過 Application Transaction 保證 USER/AGENT 與 ACTOR 同步
+    * **一致性維護**: 需要透過 Application Transaction 保證 USER/AGENT/TOOL 與 ACTOR 同步
     * **外鍵約束缺失**: `ACTOR.reference_id` 無法設定資料庫層外鍵約束，存在孤立記錄風險
     * **查詢複雜度**: 需要詳細資訊時須進行多表 JOIN 操作
     * **型別安全**: `type` 與 `reference_id` 對應正確性依賴應用層保證
